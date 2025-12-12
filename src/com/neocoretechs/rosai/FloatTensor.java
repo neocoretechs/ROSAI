@@ -1,0 +1,293 @@
+package com.neocoretechs.rosai;
+
+import java.io.Externalizable;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
+import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.DoubleAdder;
+import java.util.function.IntFunction;
+
+import jdk.incubator.vector.FloatVector;
+import jdk.incubator.vector.VectorShape;
+import jdk.incubator.vector.VectorSpecies;
+
+/**
+ * Over-simplified, shapeless, float tensor.
+ * <p>
+ * Not a strict tensor, but rather just a sequence of floats, not required to be backed by memory
+ * e.g. can represent a sequence of quantized floats.
+ */
+public abstract class FloatTensor implements Externalizable, Comparable {
+	public static boolean DEBUG = false;
+    static final int VECTOR_BIT_SIZE = Integer.getInteger("llama.VectorBitSize", VectorShape.preferredShape().vectorBitSize());
+    static final boolean USE_VECTOR_API = VECTOR_BIT_SIZE != 0;
+	
+    private long devicePtr; // 0 if not uploaded
+    private boolean uploaded = false;
+	public static int dontMatch = 0;
+	public static int totalSdot = 0;
+	//public static Object mutex = new Object();
+    
+    static short readShort(MemorySegment memorySegment, long offset) {
+        return memorySegment.get(ValueLayout.JAVA_SHORT, offset);
+    }  
+    static int readInt(MemorySegment memorySegment, long offset) {
+        return memorySegment.get(ValueLayout.JAVA_INT, offset);
+    }
+    static float readFloat(MemorySegment memorySegment, long offset) {
+        return memorySegment.get(ValueLayout.JAVA_FLOAT, offset);
+    }  
+    static byte readByte(MemorySegment memorySegment, long offset) {
+        return memorySegment.get(ValueLayout.JAVA_BYTE, offset);
+    }
+    // Preferred vector size for the fast multiplication routines.
+    // (Apple Silicon) NEON only supports up-to 128bit vectors.
+    static final VectorSpecies<Float> F_SPECIES;
+    static final VectorSpecies<Integer> I_SPECIES;
+    static final VectorSpecies<Short> S_SPECIES_HALF;
+
+    static {
+        if (USE_VECTOR_API) {
+            F_SPECIES = VectorShape.forBitSize(VECTOR_BIT_SIZE).withLanes(float.class);
+            I_SPECIES = F_SPECIES.withLanes(int.class);
+            S_SPECIES_HALF = VectorShape.forBitSize(F_SPECIES.vectorBitSize() / 2).withLanes(short.class);
+            assert F_SPECIES.length() == S_SPECIES_HALF.length();
+        } else {
+            F_SPECIES = null;
+            I_SPECIES = null;
+            S_SPECIES_HALF = null;
+        }
+    }
+    public abstract boolean isImmutable();
+    public abstract int size();
+    public abstract float getFloat(int index);
+    public abstract void setFloat(int index, float value);
+    abstract FloatVector getFloatVector(VectorSpecies<Float> species, int offset);
+    public abstract Arena getArena();
+    public abstract MemorySegment getSegment();
+ 
+  
+    abstract int getFormatType(); // for GPU side quantized conversion
+    // Explicit byte count vs element count
+    protected abstract long totalBytes();
+
+    public static int numberOfElements(int... dimensions) {
+        assert Arrays.stream(dimensions).allMatch(i -> i > 0);
+        return Arrays.stream(dimensions).reduce(Math::multiplyExact).orElseThrow();
+    }
+    public static float scalarDot(FloatTensor thiz, int thisOffset, FloatTensor that, int thatOffset, int size) {
+        float result = 0f;
+        for (int j = 0; j < size; j++) {
+            result += thiz.getFloat(thisOffset + j) * that.getFloat(thatOffset + j);
+            //System.out.printf("CPU %d) dot1 = %.6f dot2 = %.6f result = %.6f %n", j, thiz.getFloat(thisOffset + j) , that.getFloat(thatOffset + j), result);
+        }
+        return result;
+    }
+    
+    public float dot(int thisOffset, FloatTensor that, int thatOffset, int size) {
+		return scalarDot(this, thisOffset, that, thatOffset, size);
+    }
+    
+    public long devicePtrOr0() {
+        return isAllocated() ? devicePtr : 0L;
+    }
+    public boolean isAllocated() {
+        return devicePtr != 0L;
+    }
+    public boolean isUploaded() {
+    	return uploaded;
+    }
+    public void setModified() {
+    	uploaded = false;
+    }
+ 
+ 
+    /**
+     * Matrix multiply single tensor
+     * @param that
+     * @param out
+     * @param dim0
+     * @param dim1
+     */
+    void matmul(FloatTensor that, FloatTensor out, int dim0, int dim1) {
+    	//long nanos1 = System.nanoTime();
+    	//-----
+    	// CPU implementation for vector processing if available
+   		Parallel.parallelFor(0, dim0, i -> out.setFloat(i, dot(i * dim1, that, 0, dim1)));
+    }
+    /**
+     * Matrix multiply array of tensors
+     * @param context
+     * @param that
+     * @param out
+     * @param dim0
+     * @param dim1
+     */
+    void matmul(int context, FloatTensor[] that, FloatTensor[] out, int dim0, int dim1) {
+    	if (that.length != out.length) {
+    		throw new IllegalArgumentException(String.format("that.len=%d, out.len=%d", that.length, out.length));
+    	}
+    	//
+    	// matrix multiply using scalar dot product with vector processing if available, CPU otherwise
+    	//
+    	Parallel.parallelForLong(0, dim0 * context, ti -> {
+    		int idxArr = (int) (ti / dim0);
+    		int i = (int) (ti % dim0);
+    		out[idxArr].setFloat(i, dot(i * dim1, that[idxArr], 0, dim1)); 
+    	});
+    }
+
+    @FunctionalInterface
+    interface AggregateFunction {
+        float apply(float acc, float value);
+    }
+
+    float reduce(int thisOffset, int size, float seed, AggregateFunction reduce) {
+        float result = seed;
+        for (int i = 0; i < size; ++i) {
+            result = reduce.apply(result, getFloat(thisOffset + i));
+        }
+        return result;
+    }
+    float sum(int thisOffset, int size) {
+        return reduce(thisOffset, size, 0f, Float::sum);
+    }
+    float max(int thisOffset, int size) {
+        return reduce(thisOffset, size, Float.NEGATIVE_INFINITY, Float::max);
+    }
+    void copyTo(int thisOffset, FloatTensor that, int thatOffset, int size) {
+        that.mapWithIndexInPlace(thatOffset, size, (value, index) -> this.getFloat(index - thatOffset + thisOffset));
+    }
+    int argmax(int thisOffset, int size) {
+        assert size > 0;
+        int maxIndex = thisOffset;
+        float maxValue = this.getFloat(maxIndex);
+        int endIndex = thisOffset + size;
+        for (int i = thisOffset; i < endIndex; ++i) {
+            float f = this.getFloat(i);
+            if (f > maxValue) {
+                maxValue = f;
+                maxIndex = i;
+            }
+        }
+        return maxIndex;
+    }
+    int argmax() {
+        return argmax(0, size());
+    }
+
+    @FunctionalInterface
+    interface MapFunction {
+        float apply(float value);
+    }
+
+    @FunctionalInterface
+    interface MapWithIndexFunction {
+        float apply(float value, int index);
+    }
+
+    FloatTensor mapInPlace(int thisOffset, int size, MapFunction mapFunction) {
+        int endIndex = thisOffset + size;
+        for (int i = thisOffset; i < endIndex; ++i) {
+            setFloat(i, mapFunction.apply(getFloat(i)));
+        }
+        return this;
+    }
+    FloatTensor mapInPlace(MapFunction mapFunction) {
+        return mapInPlace(0, size(), mapFunction);
+    }
+    FloatTensor mapWithIndexInPlace(int thisOffset, int size, FloatTensor.MapWithIndexFunction mapWithIndexFunction) {
+        int endOffset = thisOffset + size;
+        for (int i = thisOffset; i < endOffset; ++i) {
+        	//System.out.println("setFloat:"+i+" of size:"+size);
+            setFloat(i, mapWithIndexFunction.apply(getFloat(i), i));
+        }
+        return this;
+    }
+    FloatTensor addInPlace(int thisOffset, FloatTensor that, int thatOffset, int size) {
+        return mapWithIndexInPlace(thisOffset, size, (value, index) -> value + that.getFloat(index - thisOffset + thatOffset));
+    }
+    FloatTensor addInPlace(FloatTensor that) {
+        return addInPlace(0, that, 0, size());
+    }
+    FloatTensor multiplyInPlace(int thisOffset, FloatTensor that, int thatOffset, int size) {
+        return mapWithIndexInPlace(thisOffset, size, (value, index) -> value * that.getFloat(index - thisOffset + thatOffset));
+    }
+    FloatTensor multiplyInPlace(FloatTensor that) {
+        return multiplyInPlace(0, that, 0, size());
+    }
+    FloatTensor divideInPlace(int thisOffset, int size, float value) {
+        return mapInPlace(thisOffset, size, f -> f / value);
+    }
+    /**
+     * @param thisOffset offset into this tensor
+     * @param size number of elements to fill
+     * @param value value to fill with
+     * @return this filled tensor
+     */
+    FloatTensor fillInPlace(int thisOffset, int size, float value) {
+        return mapInPlace(thisOffset, size, unused -> value);
+    }
+    
+    FloatTensor softmaxInPlace(int thisOffset, int size) {
+    	// CPU implementation for vector processing if available
+    	//try (Timer timer = Timer.log("CPU SoftMax:"+String.valueOf(size),TimeUnit.MICROSECONDS)) {
+    	// find max value (for numerical stability)
+    	float maxVal = max(thisOffset, size);
+    	// exp and sum
+    	mapInPlace(thisOffset, size, f -> (float) Math.exp(f - maxVal));
+    	float sum = sum(thisOffset, size);
+    	// normalize
+    	return divideInPlace(thisOffset, size, sum);	
+    }
+    /**
+     * ax + y (get it? single prec. ax, plus y is saxpy)
+     * @param thisOffset
+     * @param that
+     * @param thatOffset
+     * @param size
+     * @param a
+     * @return
+     */
+    FloatTensor saxpyInPlace(int thisOffset, FloatTensor that, int thatOffset, int size, float a) {
+        // this[thatOffset ... thatOffset + size) = a * that[thatOffset ... thatOffset + size) + this[thisOffset ... thisOffset + size)
+        for (int i = 0; i < size; ++i) {
+            setFloat(thisOffset + i, a * that.getFloat(thatOffset + i) + this.getFloat(thisOffset + i));
+        }
+        return this;
+    }
+    
+    static float cosineSimilarity(FloatTensor a, FloatTensor b) {
+    	float dotProduct = a.dot(0, b, 0, a.size());
+    	DoubleAdder aNormAdder = new DoubleAdder();
+    	DoubleAdder bNormAdder = new DoubleAdder();
+    	Parallel.parallelFor(0, a.size(), t -> {
+    	    aNormAdder.add(a.getFloat(t) * a.getFloat(t));
+    	    bNormAdder.add(b.getFloat(t) * b.getFloat(t));
+    	});
+    	float aNorm = (float) Math.sqrt(aNormAdder.sum());
+    	float bNorm = (float) Math.sqrt(bNormAdder.sum());
+    	return (dotProduct / (aNorm * bNorm));
+    }
+    
+    public void verify() {
+    	System.out.println("size:"+size());
+      	System.out.println("Verified via String of length:"+toString().length());
+    }
+    
+    public String toString() {
+    	StringBuilder sb = new StringBuilder("[");
+    	for(int i = 0; i < size(); i++) {
+    		sb.append(getFloat(i));
+    		if(i == (size()-1)) 
+    			sb.append("]");
+    		else
+    			sb.append(",");
+    	}
+    	return sb.toString();
+    }
+
+}
