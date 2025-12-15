@@ -108,7 +108,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		xid = dbClient.getTransactionId();
 	}
 
-
 	public UUID getKey() {
 		return key;
 	}
@@ -199,7 +198,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	public List<Result> queryParallel2(List<Object> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> res = null;
-		try (var timer = Timer.log("Querying combined hash for List of "+query.size())) {
+		try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
 			CompletableFuture<List> cres = dbClient.findSetParallel(xid, query, '?', '?');
 			res = cres.get();
 		}
@@ -249,7 +248,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public void addInteraction(Long ts, ChatFormat.Role initiator, List<Integer> userMessage, List<Integer> responseTokens) {
 		TimestampRole tr_assistant = new TimestampRole(ts, ChatFormat.Role.ASSISTANT);
 		TimestampRole tr_user = new TimestampRole(ts, initiator);
-		try(Timer t = Timer.log("SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
+		try(Timer _ = Timer.log("SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
 			try {
 				add(tr_user, userMessage);
 				add(tr_assistant, responseTokens);
@@ -485,7 +484,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		List<Integer> restensor = (List<Integer>)noIndex.getInstance();
 		results.addAll(restensor); // to keep track of max context size
 		if(DEBUG)
-			log.info("addRetrievedMessage:"+(TimestampRole)result.get(0));
+			log.info("NoIndex addRetrievedMessage:"+(TimestampRole)result.get(0));
 		returns.add(new ChatFormat.Message(((TimestampRole)result.get(0)).getRole(), DeviceManager.decode(restensor)));
 	}
 	/**
@@ -502,7 +501,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		List<Integer> restensor = (List<Integer>)noIndex.getInstance();
 		results.addAll(restensor); // to keep track of max context size
 		if(DEBUG)
-			log.info("addRetrievedMessage:"+trr);
+			log.info("existing TimestampRole addRetrievedMessage:"+trr);
 		returns.add(new ChatFormat.Message(trr.getRole(), DeviceManager.decode(restensor)));
 	}
 	/**

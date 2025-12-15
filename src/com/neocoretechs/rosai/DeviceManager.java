@@ -3,7 +3,11 @@ package com.neocoretechs.rosai;
 import java.lang.foreign.MemorySegment;
 import java.util.List;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 public final class DeviceManager {
+	private static final Log log = LogFactory.getLog(DeviceManager.class);
 	private static boolean DEBUG = false;
 
 	public static void loadModel(StringTensor model, int contextSize) {
@@ -49,12 +53,26 @@ public final class DeviceManager {
 		}	
 	}
 	public static int tokenToString(IntTensor inTokens, int size, StringTensor retStrings) {
+		List<Integer> findEot = inTokens.toList();
+		int endSize = size;
 		MemorySegment hostSeg = inTokens.getSegment();
+		for(int i = 0; i < findEot.size(); i++) {
+			if(findEot.get(i) == ChatFormat.endOfTurn) {
+				IntTensor newInt;
+				if(findEot.size() == i+1)
+					newInt = new IntTensor(findEot.subList(0, i+1));
+				else
+					newInt = new IntTensor(findEot.subList(0, i+2));
+				hostSeg = newInt.getSegment();
+				endSize = newInt.size();
+			}
+		}
+		
 		long addr = hostSeg.address();
 		MemorySegment tokSegment = retStrings.getSegment();
 		long addr2 = tokSegment.address();
 		try {
-			return (int) Llama3.tokenToStringMH.invokeExact(addr, size, addr2);
+			return (int) Llama3.tokenToStringMH.invokeExact(addr, endSize, addr2);
 		} catch (Throwable e) {
 			throw new RuntimeException(e);
 		}	
@@ -70,7 +88,11 @@ public final class DeviceManager {
 	public static String decode(List<Integer> it) {
 		IntTensor itt = new IntTensor(it);
 		StringTensor retString = new StringTensor(new byte[Llama3.options.getMaxTokens()]);
-		tokenToString(itt, it.size(), retString);
-		return retString.toString();
+		int strLen = tokenToString(itt, it.size(), retString);
+		if(strLen > Llama3.options.getMaxTokens()) {
+			log.info("Decoded string exceeds context length:"+strLen+" = ["+retString.toString().substring(0,Llama3.options.getMaxTokens()-1)+"]");
+			strLen = Llama3.options.getMaxTokens();
+		}
+		return retString.toString().substring(0,strLen-1);
 	}
 }

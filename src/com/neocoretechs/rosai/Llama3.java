@@ -11,23 +11,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-
-import java.util.function.IntConsumer;
-import java.util.function.LongConsumer;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-import java.util.stream.LongStream;
-import java.util.stream.Stream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 
 import com.neocoretechs.rosai.ffi.NativeLoader;
 /**
@@ -58,46 +44,6 @@ public class Llama3 {
 	static {
 		NativeLoader.load();
 	}
-
-    /**
-     * Parse the command line for url and xpath directive
-     * @param urlc array of cmdl args, link at 0
-     * @return The Element that matches directive
-     */
-    private static Element parseLinks(String[] urlc) {
-    	//try {	
-    		Document doc = null;
-    		if(urlc == null || urlc.length < 2)
-    			return null;
-    		try {
-    	 		doc = Jsoup.connect(urlc[0])
-        			.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        			.get();
-    		} catch(IOException ioe) {
-    			ioe.printStackTrace();
-    			return null;
-    		}
-    		Element result = null;
-    		Elements results = null;
-    		//for(int i = 1; i < urlc.length; i++) {
-    		//	results = doc.select(urlc[i]);
-    		//}
-    		results = doc.selectXpath(urlc[1]);
-    		if(results == null)
-    			return null;
-    		result = results.first();
-    		if(result == null)
-    			return null;
-    		if(result.is("a"))
-    			return parseLinks(new String[] {result.attr("href"),"//a"});
-    		return result;
-    		//System.out.printf("toString:%s text:%s wholeText:%s%n", result.toString(),result.text(),result.wholeText());
-    		//System.out.printf("result is a:%b result is a[href]:%b%n",result.is("a"),result.is("a[href]"));
-    	//} catch(MalformedURLException e) {
-    	//	e.printStackTrace();
-    	//}
-    	//return null;
-    }
 	
     public static void main(String[] args) throws IOException {
         NativeLoader.loadMethods();
@@ -158,37 +104,6 @@ public class Llama3 {
     }
 }
 
-
 record Pair<First, Second>(First first, Second second) {
 }
 
-record Vocabulary(String[] tokens, float[] scores, Map<String, Integer> tokenToIndex) {
-    public Vocabulary(String[] vocabulary, float[] scores) {
-        this(vocabulary, scores,
-                IntStream.range(0, vocabulary.length)
-                        .boxed()
-                        .collect(Collectors.toMap(i -> vocabulary[i], i -> i))
-        );
-    }
-    public String get(int tokenIndex) {
-        return tokens[tokenIndex];
-    }
-    public OptionalInt getIndex(String token) {
-        Integer value = tokenToIndex.get(token);
-        return value != null ? OptionalInt.of(value) : OptionalInt.empty();
-    }
-    public int size() {
-        return tokens.length;
-    }
-    /**
-     * Added from Mistral Vocabulary - Groff
-     * @param tokenIndex
-     * @return
-     */
-    public float getScore(int tokenIndex) {
-        return scores[tokenIndex];
-    }
-    public boolean scoresNull() {
-    	return scores == null;
-    }
-}

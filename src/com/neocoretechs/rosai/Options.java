@@ -28,7 +28,6 @@ record Options(Path modelPath, String prompt, String systemPrompt, boolean inter
 	}
 
 	static void printUsage(PrintStream out) {
-		out.println("Usage:  java Llama3.java [options]");
 		out.println();
 		out.println("Options:");
 		out.println("  --model, -m <path>            required, path to .gguf file");

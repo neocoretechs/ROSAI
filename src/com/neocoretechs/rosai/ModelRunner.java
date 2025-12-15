@@ -13,74 +13,29 @@
  */
 package com.neocoretechs.rosai;
 
-import jdk.incubator.vector.*;
 import stereo_msgs.StereoImage;
 import trajectory_msgs.ComeToHeadingStamped;
 
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.Externalizable;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.FileReader;
-import java.io.Serializable;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutput;
-import java.io.ObjectOutputStream;
 import java.io.PrintWriter;
 
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
-
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.time.Instant;
+
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeMap;
-import java.util.UUID;
-import java.util.Collection;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HexFormat;
-import java.util.Iterator;
-import java.util.OptionalInt;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.DoubleAdder;
-import java.util.function.IntConsumer;
-import java.util.function.IntFunction;
-import java.util.function.LongConsumer;
-import java.util.random.RandomGenerator;
-import java.util.random.RandomGeneratorFactory;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
 import org.apache.commons.logging.Log;
@@ -102,10 +57,7 @@ import org.ros.node.topic.Subscriber;
 import org.json.JSONObject;
 
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
-import com.neocoretechs.relatrix.key.NoIndex;
 import com.neocoretechs.relatrix.parallel.SynchronizedThreadManager;
-import com.neocoretechs.relatrix.Result;
-import com.neocoretechs.relatrix.Relation;
 import com.neocoretechs.rocksack.TransactionId;
 import com.neocoretechs.rosai.ffi.NativeLoader;
 import com.neocoretechs.rosai.relatrix.RelatrixLSH;
@@ -114,7 +66,6 @@ import diagnostic_msgs.DiagnosticStatus;
 import diagnostic_msgs.KeyValue;
 
 import com.neocoretechs.rocksack.Alias;
-import com.neocoretechs.relatrix.DuplicateKeyException;
 
 public class ModelRunner extends AbstractNodeMain {
 	private static final Log log = LogFactory.getLog(ModelRunner.class);
@@ -139,14 +90,13 @@ public class ModelRunner extends AbstractNodeMain {
 	CircularBlockingDeque<String> messageQueue = new CircularBlockingDeque<String>(1024);
 
 	protected Object mutex = new Object();
-	protected CountDownLatch modelLatch = new CountDownLatch(1);
 	protected CountDownLatch dbLatch = new CountDownLatch(1);
 
 	static long MESSAGE_THRESHOLD = 5000; // ms minimum between subscribed message reception
 	static long lastImageTime = System.currentTimeMillis();
 
 	static RelatrixLSH relatrixLSH = null;
-	static ChatFormat chatFormat;
+	static ChatFormat chatFormat = null;
 
 	static class EulerTime {
 		sensor_msgs.Imu euler;
@@ -164,17 +114,17 @@ public class ModelRunner extends AbstractNodeMain {
 	RangeTime ranges = new RangeTime();
 
 	/**
-	 * Parse the command line for url and xpath directive
-	 * @param urlc array of cmdl args, link at 0
+	 * Parse the command line for url and xpath directive, if link encountered, recursively parse.
+	 * Impersonate user agents Mozilla, Crapple, Chrome
+	 * @param urlc  link 
+	 * @param xPath xpath directive
 	 * @return The Element that matches directive
 	 */
-	private static Element parseLinks(String[] urlc) {
+	private static Element parseLinks(String urlc, String xPath) {
 		//try {	
 		Document doc = null;
-		if(urlc == null || urlc.length < 2)
-			return null;
 		try {
-			doc = Jsoup.connect(urlc[0])
+			doc = Jsoup.connect(urlc)
 					.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 					.get();
 		} catch(IOException ioe) {
@@ -186,14 +136,14 @@ public class ModelRunner extends AbstractNodeMain {
 		//for(int i = 1; i < urlc.length; i++) {
 		//	results = doc.select(urlc[i]);
 		//}
-		results = doc.selectXpath(urlc[1]);
+		results = doc.selectXpath(xPath);
 		if(results == null)
 			return null;
 		result = results.first();
 		if(result == null)
 			return null;
 		if(result.is("a"))
-			return parseLinks(new String[] {result.attr("href"),"//a"});
+			return parseLinks(result.attr("href"),"//a");
 		return result;
 		//System.out.printf("toString:%s text:%s wholeText:%s%n", result.toString(),result.text(),result.wholeText());
 		//System.out.printf("result is a:%b result is a[href]:%b%n",result.is("a"),result.is("a[href]"));
@@ -204,12 +154,12 @@ public class ModelRunner extends AbstractNodeMain {
 	}
 
 	/**
-	 * element 0 is command <br> /recalltime 
+	 * command /recalltime 
 	 * arg day time to end day time
-	 * @param query the command line with command times
+	 * @param query the command line with command times, start, end
 	 * @return String of Result instances from db that contain 2 elements of question/answer string in time range
 	 */
-	private static String parseTime(String[] query) {
+	private static String parseTime(String... query) {
 		CompletableFuture<Stream> s;
 		String tq,tqe;
 		LocalDateTime localDateTime;
@@ -247,6 +197,27 @@ public class ModelRunner extends AbstractNodeMain {
 	@Override
 	public void onStart(final ConnectedNode connectedNode) {
 		SynchronizedThreadManager.getInstance().init(new String[] {"LLM","DB"});
+		NativeLoader.loadMethods();
+		//
+		// Extract the command line options and parse them into the model options class.
+		// getNodeArguments returns args with := remappings removed
+		//
+		List<String> nodeArgs = connectedNode.getNodeConfiguration().getCommandLineLoader().getNodeArguments();
+		// first arg is ROS node, process the rest
+		ArrayList<String> opts = new ArrayList<>();
+		for(int i = 1; i< nodeArgs.size(); i++)
+			opts.add(nodeArgs.get(i));
+		//System.out.println("Args:"+Arrays.toString(nodeArgs.toArray(new String[nodeArgs.size()])));
+		//
+		// NOTE: use options.getMaxTokens() from here on out after we parse metadata, as the maxtokens() value may be -1 indicating metadata
+		// contextLength is used for maximum context size. 
+		//
+		Llama3.options = Options.parseOptions(opts);
+		StringTensor s = new StringTensor(Llama3.options.modelPath().toString());
+		try(Timer _ = Timer.log("load model")) {
+			DeviceManager.loadModel(s, Llama3.options.getMaxTokens());
+		}
+		chatFormat = new ChatFormat();
 		try {
 			dbClient = connectedNode.getRelatrixClient();
 			//dbClient.setTablespace("D:/etc/Relatrix/db/test/ai");
@@ -263,41 +234,14 @@ public class ModelRunner extends AbstractNodeMain {
 		} catch(IOException ioe) {
 			ioe.printStackTrace();
 		}
-
-		//
-		// Extract the command line options and parse them into the model options class
-		//
-		List<String> nodeArgs = connectedNode.getNodeConfiguration().getCommandLineLoader().getNodeArguments();
-		//System.out.println("Args:"+Arrays.toString(nodeArgs.toArray(new String[nodeArgs.size()])));
-		Llama3.options = Options.parseOptions(nodeArgs);
-
-		//
-		// NOTE: use options.getMaxTokens() from here on out after we parse metadata, as the maxtokens() value may be -1 indicating metadata
-		// contextLength is used for maximum context size. 
-		//
-		SynchronizedThreadManager.getInstance().spin(new Runnable() {
-			@Override
-			public void run() {
-				NativeLoader.loadMethods();
-				StringTensor s = new StringTensor(Llama3.options.modelPath().toString());
-				try(Timer _ = Timer.log("load model")) {
-					DeviceManager.loadModel(s, Llama3.options.getMaxTokens());
-				}
-				modelLatch.countDown();
-			}	
-		},"LLM");
 		//
 		// Start new thread for balance of model
 		//
 		SynchronizedThreadManager.getInstance().spin(new Runnable() {
 			@Override
 			public void run() {
-				try {
-					modelLatch.await();
-				} catch (InterruptedException e) { return; }
 				relatrixLSH = new RelatrixLSH(dbClient, Llama3.options.getMaxTokens());
 				// Chat format seems solely based on individual model, so we extract a name in model loader from Metada general.name
-	
 				// set up the preamble system directives
 				promptFrame = new PromptFrame(chatFormat);
 				List<Integer> promptTokens = new ArrayList<>();
@@ -305,7 +249,7 @@ public class ModelRunner extends AbstractNodeMain {
 				List<ChatFormat.Message> prompts = SystemPrompts.getSystemMessages();
 				promptTokens.addAll(chatFormat.encodeDialogPrompt(true, prompts));
 				Optional<String> response = processMessage(promptTokens);
-				if(response.isPresent()) {
+				if(response.isPresent() && response.get().length() > 0) {
 					if(DEBUG)
 						log.info("***Queueing from system preamble:"+response.get());
 					ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
@@ -497,8 +441,8 @@ public class ModelRunner extends AbstractNodeMain {
  		int tokNum;
         List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
         String userText = DeviceManager.decode(promptTokens);
-        ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.USER, userText);
-        dialog.add(responseMessage);
+        ChatFormat.Message promptMessage = new ChatFormat.Message(ChatFormat.Role.USER, userText);
+        dialog.add(promptMessage);
         StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
 		try(Timer _ = Timer.log("run model interactive")) {
 			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
@@ -508,16 +452,18 @@ public class ModelRunner extends AbstractNodeMain {
 			log.error("Context length exceeded, exiting");
 			return Optional.empty();
 		}
-		StringTensor toks = new StringTensor(new byte[Llama3.options.getMaxTokens()]);
-		int strLen = DeviceManager.tokenToString(retTokens, tokNum, toks);
-		System.out.println("returned prompt len="+strLen);
-		System.out.println(toks.toString().substring(0,strLen));
-        responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, toks.toString().substring(0,strLen));
-        List<Integer> responseTokens = retTokens.toList();
-		if (!responseTokens.isEmpty() && stopTokens.contains(responseTokens.getLast())) {
-			responseTokens.removeLast();
+		List<Integer> retTokenList = retTokens.toList();
+		if (!retTokenList.isEmpty() && stopTokens.contains(retTokenList.getLast())) {
+			retTokenList.removeLast();
 		}
-		return Optional.ofNullable(DeviceManager.decode(responseTokens));
+		String cleanString = DeviceManager.decode(retTokenList);
+		System.out.println("Raw returned prompt len="+cleanString.length());
+		cleanString = cleanString.trim();
+		log.info(cleanString);
+		if(cleanString.length() == 0)
+			return Optional.empty();
+        ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, cleanString);
+		return Optional.ofNullable(responseMessage.toString());
 	}
 	/**
 	 * Process the given interaction using the role provided, beginning with model.CreateNewState
@@ -526,6 +472,10 @@ public class ModelRunner extends AbstractNodeMain {
 	 * @param role the role context. role is ChatFromat.Role.USER, ChatFromat.Role.SYSTEM, ChatFromat.Role.ASSISTANT
 	 */
 	private void processRole(String message, ChatFormat.Role role) {
+		if(message.trim().length() == 0) {
+			log.info(role+" message empty...");
+			return;
+		}
 		List<Integer> promptTokens = new ArrayList<>();
 		promptTokens.add(chatFormat.getBeginOfText());
 		ChatFormat.Message chatMessage = new ChatFormat.Message(role, message);
@@ -542,7 +492,7 @@ public class ModelRunner extends AbstractNodeMain {
 		if(DEBUG)
 			log.info("***User FindNearest returned:"+ DeviceManager.decode(promptTokens));
 		Optional<String> response = processMessage(promptTokens);
-		if(response.isPresent()) {
+		if(response.isPresent() && response.get().trim().length() > 0) {
 			if(DEBUG)
 				log.info("***Queueing from role USER:"+response.get());
 			ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());

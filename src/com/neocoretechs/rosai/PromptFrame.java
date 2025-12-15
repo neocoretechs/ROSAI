@@ -1,5 +1,6 @@
 package com.neocoretechs.rosai;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
@@ -18,7 +19,7 @@ public final class PromptFrame {
 	}
 	public void setMessage(ChatFormat.Message message) {
 		this.message = message;
-		this.rawTokens = chatFormat.encodeAsCollection(chatFormat.stripFormatting(message.content()));
+		this.rawTokens = chatFormat.encodeAsCollection(message.content());//chatFormat.stripFormatting(message.content()));
 		this.formattedTokens = chatFormat.encodeMessage(message); // Includes headers + role
 	}
 	public List<Integer> getFormattedTokens() {
@@ -34,7 +35,7 @@ public final class PromptFrame {
 		return message;
 	}
 	public Collection<? extends Integer> getRawTokens() {
-		return rawTokens;
+		return new ArrayList<>(rawTokens);
 	}
 }
 

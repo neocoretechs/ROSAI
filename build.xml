@@ -42,7 +42,7 @@
   </target>
 
 	<target name="copy" depends="jar">
-		<copy file="${bin.dir}/ROSAI.jar" todir="C:/Program Files/Apache/apache-tomcat/lib"/>
+		<copy file="${bin.dir}/rosai.jar" todir="C:/Program Files/Apache/apache-tomcat/lib"/>
 	</target>
 	
   <!-- Creates Javadoc -->
@@ -57,7 +57,7 @@
 
   <!--Creates the deployable jar file  -->
   <target name="jar" depends="compile">
-    <jar destfile="${bin.dir}/.jar" basedir="${build.dir}" includes="**/com/**" excludes="**/*.java">
+    <jar destfile="${bin.dir}/rosai.jar" basedir="${build.dir}" includes="**/com/**" excludes="**/*.java">
     </jar>
   </target>
 

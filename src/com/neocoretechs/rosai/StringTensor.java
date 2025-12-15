@@ -70,7 +70,9 @@ public final class StringTensor implements Externalizable, Comparable {
 	public String toString() {
 		int len = 0;
 		byte[] utfBytes = memorySegment.toArray(ValueLayout.JAVA_BYTE);
-		while(utfBytes[len] != 0) len++;
+		for(; len < utfBytes.length; len++)
+			if(utfBytes[len] == 0) 
+				break;
 		return new String(utfBytes, 0, len, StandardCharsets.UTF_8);
 	}
 	public int size() {
