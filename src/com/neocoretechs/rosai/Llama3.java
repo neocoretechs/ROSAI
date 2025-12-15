@@ -38,9 +38,15 @@ public class Llama3 {
 	public static MethodHandle loadModelMH;
 	public static MethodHandle stringToTokenMH;
 	public static MethodHandle tokenToStringMH;
+	public static MethodHandle applyChatTemplateMH;
+	public static MethodHandle resetContextMH;
+	public static MethodHandle getTokenBOSMH;
+	public static MethodHandle getTokenEOSMH;
+	public static MethodHandle getTokenEOTMH;
 	
 	static Options options = null;
-	
+
+
 	static {
 		NativeLoader.load();
 	}

@@ -30,33 +30,37 @@ public class ChatFormat {
 	final static String endHeaderStr = "<|end_header_id|>";
 
 	public ChatFormat() {
-		StringTensor buf = new StringTensor("<|begin_of_text|> <|end_of_text|>");
+		StringTensor buf = new StringTensor("<|begin_of_text|>");
 		IntTensor it = IntTensor.allocate(8);
 		int siz = DeviceManager.stringToToken(buf, it);
 		//for(int i = 0; i < siz; i++)
 		//	System.out.println(i+".) "+it.getInt(i));
 		beginOfText = it.getInt(1);
-		this.endOfText = it.getInt(3);
+		try {
+			endOfText = (int) Llama3.getTokenEOTMH.invokeExact();
+		} catch (Throwable e) {
+			e.printStackTrace();
+		}
 		//System.out.println("BOT="+this.beginOfText+" EOT="+this.endOfText);
 		it = IntTensor.allocate(8);
 		buf = new StringTensor("<|start_header_id|> <|end_header_id|>");
 		DeviceManager.stringToToken(buf, it);
 		//for(int i = 0; i < siz; i++)
 		//	System.out.println(i+".) "+it.getInt(i));
-		this.startHeader = it.getInt(1);
-		this.endHeader = it.getInt(3);
+		startHeader = it.getInt(1);
+		endHeader = it.getInt(3);
 		//System.out.println("startHeader="+this.startHeader+" endHeader="+this.endHeader);
 		buf = new StringTensor("<|eot_id|>");
 		it = IntTensor.allocate(8);
 		DeviceManager.stringToToken(buf, it);
-		this.endOfTurn = it.getInt(1);
+		endOfTurn = it.getInt(1);
 		//System.out.println("EOTurn="+this.endOfTurn);
 		buf = new StringTensor("<|eom_id|>");
 		it = IntTensor.allocate(8);
 		DeviceManager.stringToToken(buf, it);
 		//this.endOfMessage = it.getInt(1); // only in 3.1
-		if(this.endOfMessage == 0)
-			this.endOfMessage = -1;
+		if(endOfMessage == 0)
+			endOfMessage = -1;
 		//System.out.println("EOMessage="+this.endOfMessage);
 		stopTokens = Set.of(endOfText, endOfTurn);	
 	}
@@ -272,5 +276,6 @@ public class ChatFormat {
 		return encodeAsList(text);
 	}
 	
+
 
 }

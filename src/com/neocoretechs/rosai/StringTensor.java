@@ -14,25 +14,13 @@ import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
-
+/**
+ * Tensor of Strings, backed by MemorySegment, implementing Comparable and Externalizable
+ * @author Jonathan Groff Copyright (C) NeoCoreTechs 2025
+ */
 public final class StringTensor implements Externalizable, Comparable {
 	public static boolean DEBUG = false;
 	MemorySegment memorySegment;
-	static short readShort(MemorySegment memorySegment, long offset) {
-		return memorySegment.get(ValueLayout.JAVA_SHORT, offset);
-	}  
-	static int readInt(MemorySegment memorySegment, long offset) {
-		return memorySegment.get(ValueLayout.JAVA_INT, offset);
-	}
-	static float readFloat(MemorySegment memorySegment, long offset) {
-		return memorySegment.get(ValueLayout.JAVA_FLOAT, offset);
-	}  
-	static byte readByte(MemorySegment memorySegment, long offset) {
-		return memorySegment.get(ValueLayout.JAVA_BYTE, offset);
-	}
-	static Character readUTF16(MemorySegment memorySegment, long offset) {
-		return memorySegment.get(ValueLayout.JAVA_CHAR, offset);
-	}
 
 	public StringTensor() {}
 
@@ -53,9 +41,17 @@ public final class StringTensor implements Externalizable, Comparable {
 	public void allocate(String s) {
 		allocate(getUTF8(s));
 	}
+	/**
+	 * Allocate the byte buffer, adding one for null terminator
+	 * @param utf8Bytes
+	 */
 	public void allocate(byte[] utf8Bytes) {
 		memorySegment = getArena().allocate(utf8Bytes.length + 1);
 	}
+	/**
+	 * Copy the byte buffer, adding one for null terminator
+	 * @param utf8Bytes
+	 */
 	public void copy(byte[] utf8Bytes) {
 		allocate(utf8Bytes);
 		memorySegment.copyFrom(MemorySegment.ofArray(utf8Bytes));
@@ -175,6 +171,9 @@ public final class StringTensor implements Externalizable, Comparable {
 		int vsize = in.readInt();
 		// allocate off-heap space for headSize floats
 		memorySegment = getArena().allocate(ValueLayout.JAVA_BYTE, vsize);
+		byte[] tmp = new byte[vsize];
+		in.readFully(tmp);
+		memorySegment.copyFrom(MemorySegment.ofArray(tmp));
 	}
 
 	@Override

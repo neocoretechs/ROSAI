@@ -129,5 +129,45 @@ public final class NativeLoader {
 				        					)
 				);
 		if(DEBUG) log.info("token_to_string:"+Llama3.tokenToStringMH);
+		//EXPORT int apply_chat_template(uint8_t* chatl, size_t, bool, uint8_t*, int32_t);
+		Llama3.applyChatTemplateMH = linker.downcallHandle(
+		    lookup.find("llama_chat_apply_template").get(),
+		    FunctionDescriptor.of(
+		    	ValueLayout.JAVA_INT, // return size of allocated buffer
+		        ValueLayout.JAVA_LONG, // chat struct pointer 
+		        ValueLayout.JAVA_LONG, // number of messages
+		        ValueLayout.JAVA_BOOLEAN, // add assistant
+		        ValueLayout.JAVA_LONG,  // n_msg
+		        ValueLayout.JAVA_INT    // len
+		    )
+		);
+		if(DEBUG) log.info("llama_chat_apply_template:"+Llama3.applyChatTemplateMH);
+		//EXPORT void reset_context();
+		Llama3.resetContextMH = linker.downcallHandle(
+		        lookup.find("reset_context").get(),
+		        FunctionDescriptor.ofVoid()
+		);
+		if(DEBUG) log.info("reset_context:"+Llama3.resetContextMH);
+		//EXPORT int get_token_bos();
+		Llama3.getTokenBOSMH = linker.downcallHandle(
+		        lookup.find("get_token_bos").get(),
+		        FunctionDescriptor.of(
+		    	ValueLayout.JAVA_INT)
+		);
+		if(DEBUG) log.info("get_token_bos:"+Llama3.getTokenBOSMH);
+		//EXPORT int get_token_eos();
+		Llama3.getTokenEOSMH = linker.downcallHandle(
+		        lookup.find("get_token_eos").get(),
+		        FunctionDescriptor.of(
+		    	ValueLayout.JAVA_INT)
+		);
+		if(DEBUG) log.info("get_token_eos:"+Llama3.getTokenEOSMH);
+		//EXPORT int get_token_eot();
+		Llama3.getTokenEOTMH = linker.downcallHandle(
+		        lookup.find("get_token_eot").get(),
+		        FunctionDescriptor.of(
+		    	ValueLayout.JAVA_INT)
+		);
+		if(DEBUG) log.info("get_token_eot:"+Llama3.getTokenEOTMH);
 	}
 }

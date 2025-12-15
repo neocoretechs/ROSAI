@@ -121,12 +121,12 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @return Does a lookup in the table for a query using its hash. If no
 	 *         candidates are found, an empty list is returned, otherwise, the
 	 *         list of candidates is returned as List<Result> where Result contains timetamp, NoIndex with vector
-	 * @throws IOException 
-	 * @throws IllegalAccessException 
-	 * @throws ClassNotFoundException 
-	 * @throws IllegalArgumentException 
-	 * @throws ExecutionException 
-	 * @throws InterruptedException 
+	 * @throws IOException asynchronous database client exception
+	 * @throws IllegalAccessException asynchronous database client exception
+	 * @throws ClassNotFoundException asynchronous database client exception
+	 * @throws IllegalArgumentException asynchronous database client exception
+	 * @throws ExecutionException asynchronous database client exception
+	 * @throws InterruptedException asynchronous database client exception
 	 */
 	public List<Result> query(List<Integer> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		ArrayList<Result> res = new ArrayList<Result>();
@@ -153,16 +153,16 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * list is returned, otherwise, the list of candidates is returned.
 	 * 
 	 * @param query The query vector.
-	 * @param normalizedQuery TODO
+	 * @param normalizedQuery the FloatTensor of normalization applied to tokenized query
 	 * @return Does a lookup in the table for a query using its hash. If no
 	 *         candidates are found, an empty list is returned, otherwise, the
 	 *         list of candidates is returned as List<Result> where Result contains TimestampRole, vector
-	 * @throws IOException 
-	 * @throws IllegalAccessException 
-	 * @throws ClassNotFoundException 
-	 * @throws IllegalArgumentException 
-	 * @throws ExecutionException 
-	 * @throws InterruptedException 
+	 * @throws IOException asynchronous database client exception
+	 * @throws IllegalAccessException asynchronous database client exception
+	 * @throws ClassNotFoundException asynchronous database client exception
+	 * @throws IllegalArgumentException asynchronous database client exception 
+	 * @throws ExecutionException asynchronous database client exception
+	 * @throws InterruptedException asynchronous database client exception 
 	 */
 	public List<Result> queryParallel(List<Integer> query, FloatTensor normalizedQuery) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> res = new ArrayList<Result>();
@@ -171,7 +171,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			Integer combinedHash = hash(hashTable.get(i), normalizedQuery);
 			iq.add(combinedHash);
 		}
-		try (var timer = Timer.log("Querying combined hash for table of "+hashTable.size())) {
+		try (var _ = Timer.log("Querying combined hash for table of "+hashTable.size())) {
 			CompletableFuture<List> cres = dbClient.findSetParallel(xid, iq, '?', '?');
 			res = cres.get();
 			//for(Result r: res) {
@@ -189,12 +189,12 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @return Does a lookup in the table for a query using its hash. If no
 	 *         candidates are found, an empty list is returned, otherwise, the
 	 *         list of candidates is returned as List<Result> where Result contains TimestampRole, vector
-	 * @throws IOException 
-	 * @throws IllegalAccessException 
-	 * @throws ClassNotFoundException 
-	 * @throws IllegalArgumentException 
-	 * @throws ExecutionException 
-	 * @throws InterruptedException 
+	 * @throws IOException asynchronous database client exception
+	 * @throws IllegalAccessException asynchronous database client exception
+	 * @throws ClassNotFoundException asynchronous database client exception
+	 * @throws IllegalArgumentException asynchronous database client exception
+	 * @throws ExecutionException asynchronous database client exception
+	 * @throws InterruptedException asynchronous database client exception
 	 */
 	public List<Result> queryParallel2(List<Object> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> res = null;
@@ -239,7 +239,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		return new F32FloatTensor(size, MemorySegment.ofArray(floats));
 	}
 	/**
-	 * Add the user/assistant interaction
+	 * Add the user/assistant interaction. Generates either commit or rollback on duplicate key.
 	 * @param ts the timestamp
 	 * @param initiator the initiator of the interaction; either USER or SYSTEM
 	 * @param userMessage tokenized initiator message
@@ -248,7 +248,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public void addInteraction(Long ts, ChatFormat.Role initiator, List<Integer> userMessage, List<Integer> responseTokens) {
 		TimestampRole tr_assistant = new TimestampRole(ts, ChatFormat.Role.ASSISTANT);
 		TimestampRole tr_user = new TimestampRole(ts, initiator);
-		try(Timer _ = Timer.log("SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
+		try(Timer _ = Timer.log("addInteraction: SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
 			try {
 				add(tr_user, userMessage);
 				add(tr_assistant, responseTokens);
@@ -265,12 +265,12 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * reference the vector in the Relatrix relationship.
 	 * @param timestampRole The map of the morphism to store LSH->TimestampRole->NoIndex key contains timestamp and role
 	 * @param vector the list of tokens
-	 * @throws DuplicateKeyException 
-	 * @throws IOException 
-	 * @throws ClassNotFoundException 
-	 * @throws IllegalAccessException 
-	 * @throws ExecutionException 
-	 * @throws InterruptedException 
+	 * @throws DuplicateKeyException attempt to insert duplicate combined hash.timestampRole key
+	 * @throws IOException asynchronous database client exception
+	 * @throws ClassNotFoundException asynchronous database client exception
+	 * @throws IllegalAccessException asynchronous database client exception
+	 * @throws ExecutionException asynchronous database client exception
+	 * @throws InterruptedException asynchronous database client exception
 	 */
 	public void add(TimestampRole timestampRole, List<Integer> vector) throws IllegalAccessException, ClassNotFoundException, IOException, InterruptedException, ExecutionException {
 		FloatTensor fvec = normalize(vector);
@@ -286,26 +286,25 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * retrieve that vector, then get the other vectors with the LSH index and obtain
 	 * the most relevant.
 	 * @param promptFrame list of messages to populate starting with initial request
-	 * @param tokenizer decoder for String from tokens, needed to create new Messages
 	 * @return List of retrieved messages
-	 * @throws ExecutionException 
-	 * @throws InterruptedException 
-	 * @throws IOException 
-	 * @throws IllegalAccessException 
-	 * @throws ClassNotFoundException 
-	 * @throws IllegalArgumentException 
+	 * @throws ExecutionException asychronous database client exception
+	 * @throws InterruptedException asychronous database client exception
+	 * @throws IOException asychronous database client exception
+	 * @throws IllegalAccessException asychronous database client exception
+	 * @throws ClassNotFoundException asychronous database client exception
+	 * @throws IllegalArgumentException asychronous database client exception
 	 */
 	public List<ChatFormat.Message> findNearest(PromptFrame promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> nearest = null;
 		List<Integer> results = (List<Integer>)promptFrame.getRawTokens();
 		if(DEBUG)
-			log.info("User query has "+results.size()+" tokens");
+			log.info("findNearest User query has "+results.size()+" tokens");
 		List<ChatFormat.Message> returns = new ArrayList<ChatFormat.Message>();
 
 		FloatTensor fmessage = normalize(results);
 		nearest = queryParallel(results, fmessage);
 		if(DEBUG)
-			log.info("Retrieved "+nearest.size()+" entries from LSH index query.");
+			log.info("findNearest Retrieved "+nearest.size()+" entries from LSH index query.");
 		// If we retrieved nothing from semantic query of initial message, try getting last timestamp
 		if(nearest.isEmpty()) {
 			//return results;
@@ -329,7 +328,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				// put most recent user query last
 				returns.add(promptFrame.getMessage());
 				if(DEBUG)
-					log.info("Returning from empty index and timestamp query with original prompt");
+					log.info("findNearest Returning from empty index and timestamp query with original prompt");
 				return returns;
 			}
 		}
@@ -338,7 +337,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// organize our current Results and find similar relevant entries via cosine similarity
 		// and theta similarity
 		// organize their indexes in a TreeMap in descending order of cosDist, index in Result
-		double[] cossim = new double[nearest.size()];
+		double[] thetasim = new double[nearest.size()];
 		int cnt = 0;
 		TreeMap<Double, Integer> tm = new TreeMap<Double, Integer>();
 		for(int i = 0; i < nearest.size(); i++) {
@@ -346,8 +345,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			// TimestampRole at Result.get(0)
 			NoIndex noIndex = (NoIndex) result.get(1);
 			List<Integer> restensor = (List<Integer>)noIndex.getInstance();
-			if(DEBUG)
-				log.info("retrieved dialog:"+result.get(0)+" "+DeviceManager.decode(restensor));
 			double cosDist;
 			FloatTensor cantensor = normalize(restensor);
 			if(cantensor.size() < fmessage.size())
@@ -355,7 +352,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			else
 				cosDist = cantensor.dot(0, fmessage, 0, fmessage.size());
 			cosDist = Math.acos(cosDist); // radians
-			cossim[i] = cosDist;
+			thetasim[i] = cosDist;
+			if(DEBUG)
+				log.info("findNearest retrieved result set dialog index:"+i+" of "+nearest.size()+" theta="+cosDist+" .) "+result.get(0)+" "+DeviceManager.decode(restensor));
 			tm.put(cosDist, i);
 		}
 		// Now we need another TreeMap with the entries in TimestampRole descending order. As we
@@ -453,11 +452,11 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			++cnt;
 		}
 		if(DEBUG)
-			log.info(cnt+" results inserted into context. Similarities:"+Arrays.toString(cossim));
+			log.info("findNearest "+cnt+" results inserted into context. Similarities:"+Arrays.toString(thetasim));
 		// if no interactions played out, lets build a system level series of responses with what we have
 		if(cnt == 0) {
 			if(DEBUG)
-				log.info(tm.values().size()+" context entries, current results:"+results.size()+" max:"+(maxTokens - (((float)maxTokens) * .3)));
+				log.info("findNearest "+tm.values().size()+" context entries, current results:"+results.size()+" max:"+(maxTokens - (((float)maxTokens) * .3)));
 			it = tm.values().iterator();
 			while(it.hasNext() && results.size() < (maxTokens - (((float)maxTokens) * .3))) {
 				int i = it.next();
@@ -474,44 +473,59 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	/**
 	 * Add the retrieved Result of 0 - TimestampRole 1 - NoIndex vector of List<Integer> to returns list
 	 * as ChatFormat.Message
-	 * @param result
-	 * @param results
-	 * @param returns
-	 * @param tokenizer
+	 * @param result Result result set from retrieval
+	 * @param results tokenized results
+	 * @param returns List of ChatFormat.Messge returns
 	 */
 	private void addRetrievedMessage(Result result, List<Integer> results, List<ChatFormat.Message> returns) {
 		NoIndex noIndex = (NoIndex) result.get(1);
 		List<Integer> restensor = (List<Integer>)noIndex.getInstance();
 		results.addAll(restensor); // to keep track of max context size
+		String resString = DeviceManager.decode(restensor);
 		if(DEBUG)
-			log.info("NoIndex addRetrievedMessage:"+(TimestampRole)result.get(0));
-		returns.add(new ChatFormat.Message(((TimestampRole)result.get(0)).getRole(), DeviceManager.decode(restensor)));
+			log.info("addRetrievedMessage:"+(TimestampRole)result.get(0)+" for NoIndex tokens="+results.size()+" decode="+resString.length());
+		// calculate running total
+		int totalLen = 0;
+		for(ChatFormat.Message messg : returns)
+			totalLen += messg.content().length();
+		if(totalLen+resString.length() >= maxTokens) {
+			log.info("addRetrievedMessage: addition of retrieved result of length "+resString+" would exceed context length by "+(totalLen+resString.length()-maxTokens));
+			return;
+		}
+		returns.add(new ChatFormat.Message(((TimestampRole)result.get(0)).getRole(), resString));
 	}
 	/**
 	 * Permutation for existing TimestampRole, Result 0 - NoIndex vector
 	 * add List<Integer> to returns list as ChatFormat.Message
-	 * @param result
-	 * @param trr
-	 * @param results
-	 * @param returns
-	 * @param tokenizer
+	 * @param result result set from retrieval
+	 * @param trr TimestampRole retrieved TimestampRole
+	 * @param results tokenized results
+	 * @param returns List of ChatFormat.Message returns
 	 */
 	private void addRetrievedMessage(Result result, TimestampRole trr, List<Integer> results, List<ChatFormat.Message> returns) {
 		NoIndex noIndex = (NoIndex) result.get(0);
 		List<Integer> restensor = (List<Integer>)noIndex.getInstance();
 		results.addAll(restensor); // to keep track of max context size
+		String resString = DeviceManager.decode(restensor);
 		if(DEBUG)
-			log.info("existing TimestampRole addRetrievedMessage:"+trr);
-		returns.add(new ChatFormat.Message(trr.getRole(), DeviceManager.decode(restensor)));
+			log.info("addRetrievedMessage: existing TimestampRole:"+trr+" decode="+resString.length());
+		// calculate running total
+		int totalLen = 0;
+		for(ChatFormat.Message messg : returns)
+			totalLen += messg.content().length();
+		if(totalLen+resString.length() >= maxTokens) {
+			log.info("addRetrievedMessage: addition of retrieved result of length "+resString+" would exceed context length by "+(totalLen+resString.length()-maxTokens));
+			return;
+		}
+		returns.add(new ChatFormat.Message(trr.getRole(), resString));
 	}
 	/**
 	 * Get the NoIndex vector of List<Integer> for existing TimestampRole
-	 * @param results
-	 * @param returns
-	 * @param trr
-	 * @param tokenizer
-	 * @throws InterruptedException
-	 * @throws ExecutionException
+	 * @param results List of tokenized results
+	 * @param returns running list of ChatFormat.message retrievals
+	 * @param trr target TimestampRole
+	 * @throws InterruptedException asynchronous db client exception
+	 * @throws ExecutionException asynchronous client/database exception
 	 */
 	private void getTimestampRole(List<Integer> results, List<ChatFormat.Message> returns, TimestampRole trr) throws InterruptedException, ExecutionException {
 		if(DEBUG)
@@ -534,15 +548,15 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * Prime the semantic pump by retrieving last time value, then the relations with that value, later, feed the
 	 * vectors for that time into the prompt, then retrieve any other indexes that match the retrieved indexes.
 	 * So should pick up at least the 2 indexes for a USER/ASSISTANT request/response for a given timestamp
-	 * @return The Results with index at element 0
-	 * @throws InterruptedException
-	 * @throws ExecutionException
+	 * @return The Results result set with index at element 0
+	 * @throws InterruptedException asynchronous db client exception
+	 * @throws ExecutionException asynchronous client/database exception
 	 */
 	private List<Result> primeByTime() throws InterruptedException, ExecutionException {
 		ArrayList<Result> res = new ArrayList<Result>();
 		TimestampRole lastTime = (TimestampRole) dbClient.last(xid, TimestampRole.class).get();
 		if(lastTime != null) {
-			try (var timer = Timer.log("Querying by time "+ LocalDateTime.ofInstant(Instant.ofEpochMilli(lastTime.getTimestamp()), ZoneId.systemDefault()))) {
+			try (var _ = Timer.log("primeByTime Querying by time "+ LocalDateTime.ofInstant(Instant.ofEpochMilli(lastTime.getTimestamp()), ZoneId.systemDefault()))) {
 				CompletableFuture<Iterator> cres = dbClient.findSet(xid, '?', lastTime, '*');
 				Iterator<?> it = cres.get();
 				while(it.hasNext()) {
@@ -556,7 +570,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		return res;
 	}
 	/**
-	 * Calculate the combined hash for a vector.
+	 * Calculate the combined hash for a vector using CosineHash.
 	 * @param hash one of numberOfHashes
 	 * @param vector The vector to calculate the combined hash for.
 	 * @return An integer representing a combined hash.
@@ -571,7 +585,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	}
 
 	/**
-	 * Return the number of hash functions used in the hash table.
+	 * Return the number of hash functions used in the CosingHash table.
 	 * @return The number of hash functions used in the hash table.
 	 */
 	public int getNumberOfHashes() {

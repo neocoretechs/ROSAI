@@ -87,12 +87,25 @@ public final class DeviceManager {
 	
 	public static String decode(List<Integer> it) {
 		IntTensor itt = new IntTensor(it);
-		StringTensor retString = new StringTensor(new byte[Llama3.options.getMaxTokens()]);
-		int strLen = tokenToString(itt, it.size(), retString);
-		if(strLen > Llama3.options.getMaxTokens()) {
-			log.info("Decoded string exceeds context length:"+strLen+" = ["+retString.toString().substring(0,Llama3.options.getMaxTokens()-1)+"]");
-			strLen = Llama3.options.getMaxTokens();
-		}
-		return retString.toString().substring(0,strLen-1);
+		StringTensor retStringTensor = new StringTensor(new byte[Llama3.options.getMaxTokens()]);
+		int strLen = tokenToString(itt, it.size(), retStringTensor);
+		String retString = retStringTensor.toString().substring(0,strLen-1);
+		return retString.trim();
+	}
+	
+	public static void applyChatTemplate(MessageTensor chatSegt, StringTensor outSegt, int msgNum, int bufLen, boolean addAssistantPrompt) {
+		long chatSeg = chatSegt.getSegment().address();
+		long outSeg = outSegt.getSegment().address();
+	    try {
+	        Llama3.applyChatTemplateMH.invoke(
+	            chatSeg,                                         // chat
+	            (long) msgNum,                              // n_msg
+	            addAssistantPrompt,                              // add_ass
+	            outSeg,                                          // buf
+	            bufLen                                           // len
+	        );
+	    } catch (Throwable t) {
+	        throw new RuntimeException("apply_chat_template failed", t);
+	    }
 	}
 }
