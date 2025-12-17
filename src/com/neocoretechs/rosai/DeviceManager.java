@@ -1,11 +1,17 @@
 package com.neocoretechs.rosai;
 
 import java.lang.foreign.MemorySegment;
+import java.util.Arrays;
 import java.util.List;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-
+/**
+ * DeviceManager maintains static methods that wrap the native methods loaded via the FFI that
+ * call out to the Llama.cpp runtime. The memorysegments that are backing the various tensor classes
+ * are extracted and the address is passed to the FFI methods as the primary method of data transfer to the native side.
+ * @author Jonathan Groff Copyright (C) NeoCoreTechs 2025
+ */
 public final class DeviceManager {
 	private static final Log log = LogFactory.getLog(DeviceManager.class);
 	private static boolean DEBUG = false;
@@ -57,7 +63,7 @@ public final class DeviceManager {
 		int endSize = size;
 		MemorySegment hostSeg = inTokens.getSegment();
 		for(int i = 0; i < findEot.size(); i++) {
-			if(findEot.get(i) == ChatFormat.endOfTurn) {
+			if(ChatFormat.stopTokens.contains(findEot.get(i))) {
 				IntTensor newInt;
 				if(findEot.size() == i+1)
 					newInt = new IntTensor(findEot.subList(0, i+1));
@@ -86,6 +92,7 @@ public final class DeviceManager {
 	}
 	
 	public static String decode(List<Integer> it) {
+		//System.out.println(Arrays.toString(it.toArray()));
 		IntTensor itt = new IntTensor(it);
 		StringTensor retStringTensor = new StringTensor(new byte[Llama3.options.getMaxTokens()]);
 		int strLen = tokenToString(itt, it.size(), retStringTensor);
@@ -93,11 +100,12 @@ public final class DeviceManager {
 		return retString.trim();
 	}
 	
-	public static void applyChatTemplate(MessageTensor chatSegt, StringTensor outSegt, int msgNum, int bufLen, boolean addAssistantPrompt) {
+	public static int applyChatTemplate(MessageTensor chatSegt, StringTensor outSegt, int msgNum, int bufLen, boolean addAssistantPrompt) {
 		long chatSeg = chatSegt.getSegment().address();
 		long outSeg = outSegt.getSegment().address();
+		int outLen;
 	    try {
-	        Llama3.applyChatTemplateMH.invoke(
+	        outLen = (int) Llama3.applyChatTemplateMH.invokeExact(
 	            chatSeg,                                         // chat
 	            (long) msgNum,                              // n_msg
 	            addAssistantPrompt,                              // add_ass
@@ -107,5 +115,13 @@ public final class DeviceManager {
 	    } catch (Throwable t) {
 	        throw new RuntimeException("apply_chat_template failed", t);
 	    }
+	    return outLen;
+	}
+	public static void resetContext() {
+		try {
+			Llama3.resetContextMH.invokeExact();
+		} catch (Throwable e) {
+			 throw new RuntimeException("Context reset failed", e);
+		}
 	}
 }

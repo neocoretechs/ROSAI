@@ -15,130 +15,65 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 /**
  * Utility tailored for Llama 3 instruct prompt format.
  */
 public class ChatFormat {
-	static int beginOfText;
-	static int endHeader;
-	static int startHeader;
-	static int endOfTurn;
-	static int endOfText;
-	static int endOfMessage;
-	static Set<Integer> stopTokens;
-	final static String startHeaderStr = "<|start_header_id|>";
-	final static String endHeaderStr = "<|end_header_id|>";
-
+	private static final Log log = LogFactory.getLog(ChatFormat.class);
+	public static boolean DEBUG = true;
+	public static int endOfTurn;
+	public static int endOfSentence;
+	public static int endOfText;
+	public static Set<Integer> stopTokens;
 	public ChatFormat() {
-		StringTensor buf = new StringTensor("<|begin_of_text|>");
-		IntTensor it = IntTensor.allocate(8);
-		int siz = DeviceManager.stringToToken(buf, it);
-		//for(int i = 0; i < siz; i++)
-		//	System.out.println(i+".) "+it.getInt(i));
-		beginOfText = it.getInt(1);
 		try {
-			endOfText = (int) Llama3.getTokenEOTMH.invokeExact();
+			//endOfTurn = (int) Llama3.getTokenEOTMH.invokeExact();
+			endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();
+			//System.out.println("eot="+endOfTurn+" eos="+endOfSentence);
+			StringTensor buf = new StringTensor("<|eot_id|>");
+			IntTensor it = IntTensor.allocate(8);
+			DeviceManager.stringToToken(buf, it);
+			endOfText = it.getInt(0);
+			endOfTurn = it.getInt(1);
+			//System.out.println("eot="+endOfTurn+" eoText="+endOfText+" int[0]="+it.getInt(0));
+			stopTokens = Set.of(endOfText, endOfTurn);
 		} catch (Throwable e) {
 			e.printStackTrace();
 		}
-		//System.out.println("BOT="+this.beginOfText+" EOT="+this.endOfText);
-		it = IntTensor.allocate(8);
-		buf = new StringTensor("<|start_header_id|> <|end_header_id|>");
-		DeviceManager.stringToToken(buf, it);
-		//for(int i = 0; i < siz; i++)
-		//	System.out.println(i+".) "+it.getInt(i));
-		startHeader = it.getInt(1);
-		endHeader = it.getInt(3);
-		//System.out.println("startHeader="+this.startHeader+" endHeader="+this.endHeader);
-		buf = new StringTensor("<|eot_id|>");
-		it = IntTensor.allocate(8);
-		DeviceManager.stringToToken(buf, it);
-		endOfTurn = it.getInt(1);
-		//System.out.println("EOTurn="+this.endOfTurn);
-		buf = new StringTensor("<|eom_id|>");
-		it = IntTensor.allocate(8);
-		DeviceManager.stringToToken(buf, it);
-		//this.endOfMessage = it.getInt(1); // only in 3.1
-		if(endOfMessage == 0)
-			endOfMessage = -1;
-		//System.out.println("EOMessage="+this.endOfMessage);
-		stopTokens = Set.of(endOfText, endOfTurn);	
 	}
 
-	public Set<Integer> getStopTokens() {
-		return stopTokens;
-	}
-	public int getBeginOfText() {
-		return beginOfText;
-	}
-	public int getEndOfTurn() {
-		return endOfTurn;
-	}
-	public List<Integer> encodeHeader(ChatFormat.Message message) {
-		List<Integer> tokens = new ArrayList<>();
-		tokens.add(startHeader);
-		tokens.addAll(this.encodeAsList(message.role().name()));
-		tokens.add(endHeader);
-		tokens.addAll(this.encodeAsList("\n"));
-		return tokens;
-	}
-	public String encodeHeaderString(ChatFormat.Message message) {
-		StringBuilder tokens = new StringBuilder();
-		tokens.append(startHeaderStr);
-		tokens.append(message.role().name());
-		tokens.append(endHeaderStr);
-		tokens.append("\n");
-		return tokens.toString();
-	}
-	public List<Integer> encodeMessage(ChatFormat.Message message) {
-		List<Integer> tokens = this.encodeHeader(message);
-		tokens.addAll(this.encodeAsList(message.content().strip()));
-		tokens.add(endOfTurn);
-		return tokens;
-	}
-	public List<Integer> encodeMessage(ChatFormat.Message message, List<Integer> tokenList) {
-		List<Integer> tokens = this.encodeHeader(message);
-		tokens.addAll(tokenList);
-		tokens.add(endOfTurn);
-		return tokens;
-	}
 	/**
-	 * Encode beginOfText, then follow with list of supplied messages
+	 * Encode list of supplied messages into tokenized List, applying chat templates
 	 * @param appendAssistantTurn true to add a blank ASSISTANT header at the end of the list of prompts
 	 * @param dialog List of messages to tokenize
-	 * @return the tokenized list of appended messages
+	 * @return the tokenized list of templatized messages
 	 */
 	public List<Integer> encodeDialogPrompt(boolean appendAssistantTurn, List<ChatFormat.Message> dialog) {
-		List<Integer> tokens = new ArrayList<>();
-		tokens.add(beginOfText);
-		for (ChatFormat.Message message : dialog) {
-			tokens.addAll(this.encodeMessage(message));
-		}
-		if (appendAssistantTurn) {
-			// Add the start of an assistant message for the model to complete.
-			tokens.addAll(this.encodeHeader(new ChatFormat.Message(ChatFormat.Role.ASSISTANT, "")));
-		}
-		return tokens;
+		MessageTensor mt = new MessageTensor(dialog);
+		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
+		String resStr = st.toString();
+		if(DEBUG)
+			log.info(this.getClass().getName()+".encodeDialogPrompt="+resStr);
+		return DeviceManager.encode(resStr);
 	}
-
+	/**
+	 * Encode list of supplied messages into dialog text in StringTensor, applying chat templates
+	 * @param appendAssistantTurn appendAssistantTurn true to add a blank ASSISTANT header at the end of the list of prompts
+	 * @param dialog list of messages to process
+	 * @return the StringTensor of templatized messages
+	 */
 	public StringTensor extractDialogPrompt(boolean appendAssistantTurn, List<Message> dialog) {
-		StringBuilder sb = new StringBuilder();
-		for (ChatFormat.Message message : dialog) {
-			sb.append(startHeaderStr);
-			sb.append(message.role().getRole());
-			sb.append(endHeaderStr);
-			sb.append(message.content());
-		}
-		if (appendAssistantTurn) {
-			// Add the start of an assistant message for the model to complete.
-			sb.append(startHeaderStr);
-			sb.append(ChatFormat.Role.ASSISTANT.getRole());
-			sb.append(endHeaderStr);
-		}
-		return new StringTensor(sb.toString());
+		MessageTensor mt = new MessageTensor(dialog);
+		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
+		if(DEBUG)
+			log.info(this.getClass().getName()+".extractDialogPrompt="+st.toString());
+		return st;
 	}
 
-	public String stripFormatting(String input) {
+	private String stripFormatting(String input) {
 		return input.replaceAll("<\\|.*?\\|>", "")
 				.replaceAll("\\*+", "")
 				.replaceAll("(?m)^USER:|AI:", "")
@@ -148,11 +83,9 @@ public class ChatFormat {
 	public record Message(ChatFormat.Role role, String content) {
 		@Override
 		public String toString() {
-			StringBuilder sb = new StringBuilder(startHeaderStr);
-			sb.append(role.getRole());
-			sb.append(endHeaderStr);
-			sb.append(content);
-			return sb.toString();
+			ArrayList<Message> tr = new ArrayList<Message>(1);
+			tr.add(this);
+			return MessageTensor.applyChatTemplate(tr, false);
 		}
 	}
 
@@ -244,7 +177,7 @@ public class ChatFormat {
 			.stream()
 			.collect(Collectors.toMap(Map.Entry::getValue, Map.Entry::getKey));
 
-	public static String replaceControlCharacters(int[] codePoints) {
+	private static String replaceControlCharacters(int[] codePoints) {
 		// we don't want to print control characters
 		// which distort the output (e.g. \n or much worse)
 		// https://stackoverflow.com/questions/4324790/removing-control-characters-from-a-string-in-python/19016117#19016117
@@ -260,11 +193,11 @@ public class ChatFormat {
 		return chars.toString();
 	}
 
-	public static String replaceControlCharacters(String str) {
+	private static String replaceControlCharacters(String str) {
 		return replaceControlCharacters(str.codePoints().toArray());
 	}
 
-	public List<Integer> encodeAsList(String text) {
+	private List<Integer> encodeAsList(String text) {
 		StringTensor st = new StringTensor(text);
 		IntTensor it = IntTensor.allocate(2048);
 		int toks = DeviceManager.stringToToken(st, it);
@@ -272,10 +205,8 @@ public class ChatFormat {
 		return Arrays.stream(trimToks.toArray()).boxed().toList();
 	}
 
-	public Collection<? extends Integer> encodeAsCollection(String text) {
+	private Collection<? extends Integer> encodeAsCollection(String text) {
 		return encodeAsList(text);
 	}
 	
-
-
 }

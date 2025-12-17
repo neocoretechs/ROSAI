@@ -72,26 +72,26 @@ public final class NativeLoader {
 		SymbolLookup lookup = SymbolLookup.loaderLookup();
 		//if(DEBUG) log.info("Loader:"+lookup);
 		Llama3.cudaGetMemInfo = linker.downcallHandle(
-				lookup.find("cudaGetMemInfo").get(),
+				lookup.find("cudaGetMemInfo").orElseThrow(),
 				FunctionDescriptor.ofVoid(
 						ValueLayout.ADDRESS,    // size_t* free, writes to memorysegments
 						ValueLayout.ADDRESS     // size_t* total
 						));
 		if(DEBUG) log.info("cudaGetMemInfo:"+Llama3.cudaGetMemInfo);
 	    Llama3.copyFromNativeMH = linker.downcallHandle(
-		        lookup.find("copyFromNative").get(),
+		        lookup.find("copyFromNative").orElseThrow(),
 		        FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG,   // uint8_t* tensor, or uint8_t** arraytensor
 		                                  ValueLayout.JAVA_LONG) // size_t bytes
 		    );
 			if(DEBUG) log.info("copyFromNative:"+Llama3.copyFromNativeMH);
 		Llama3.loadModelMH = linker.downcallHandle(
-			        lookup.find("load_model").get(),
+			        lookup.find("load_model").orElseThrow(),
 			        FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, // uint8_t* tensor model path
 			        							ValueLayout.JAVA_INT)  // context size
 			);
 		if(DEBUG) log.info("load_model:"+Llama3.loadModelMH);
 	    Llama3.runModelMH = linker.downcallHandle(
-		        lookup.find("run_model").get(),
+		        lookup.find("run_model").orElseThrow(),
 		        FunctionDescriptor.of(ValueLayout.JAVA_INT,
 		        						ValueLayout.JAVA_LONG, // prompt StringTensor
 		        						ValueLayout.JAVA_FLOAT, // temp
@@ -102,7 +102,7 @@ public final class NativeLoader {
 		    );
 		if(DEBUG) log.info("run_model:"+Llama3.runModelMH);
 	    Llama3.runModelTokenizeMH = linker.downcallHandle(
-		        lookup.find("run_model_tokenize").get(),
+		        lookup.find("run_model_tokenize").orElseThrow(),
 		        FunctionDescriptor.of(ValueLayout.JAVA_INT,
 		        						ValueLayout.JAVA_LONG, // prompt StringTensor
 		        						ValueLayout.JAVA_FLOAT, // temp
@@ -113,7 +113,7 @@ public final class NativeLoader {
 		    );
 		if(DEBUG) log.info("run_model_tokenize:"+Llama3.runModelTokenizeMH);
 		Llama3.stringToTokenMH = linker.downcallHandle(
-			    lookup.find("string_to_token").get(),
+			    lookup.find("string_to_token").orElseThrow(),
 			    FunctionDescriptor.of(ValueLayout.JAVA_INT,
 			        					ValueLayout.JAVA_LONG, // prompt StringTensor
 			        					ValueLayout.JAVA_LONG // IntTensor return tokens
@@ -121,7 +121,7 @@ public final class NativeLoader {
 			    );
 		if(DEBUG) log.info("string_to_token:"+Llama3.stringToTokenMH);
 		Llama3.tokenToStringMH = linker.downcallHandle(
-				lookup.find("token_to_string").get(),
+				lookup.find("token_to_string").orElseThrow(),
 				FunctionDescriptor.of(ValueLayout.JAVA_INT,
 				        					ValueLayout.JAVA_LONG, // IntTensor of tokens
 				        					ValueLayout.JAVA_INT, // size
@@ -131,7 +131,7 @@ public final class NativeLoader {
 		if(DEBUG) log.info("token_to_string:"+Llama3.tokenToStringMH);
 		//EXPORT int apply_chat_template(uint8_t* chatl, size_t, bool, uint8_t*, int32_t);
 		Llama3.applyChatTemplateMH = linker.downcallHandle(
-		    lookup.find("llama_chat_apply_template").get(),
+		    lookup.find("apply_chat_template").orElseThrow(),
 		    FunctionDescriptor.of(
 		    	ValueLayout.JAVA_INT, // return size of allocated buffer
 		        ValueLayout.JAVA_LONG, // chat struct pointer 
@@ -141,30 +141,30 @@ public final class NativeLoader {
 		        ValueLayout.JAVA_INT    // len
 		    )
 		);
-		if(DEBUG) log.info("llama_chat_apply_template:"+Llama3.applyChatTemplateMH);
+		if(DEBUG) log.info("apply_chat_template:"+Llama3.applyChatTemplateMH);
 		//EXPORT void reset_context();
 		Llama3.resetContextMH = linker.downcallHandle(
-		        lookup.find("reset_context").get(),
+		        lookup.find("reset_context").orElseThrow(),
 		        FunctionDescriptor.ofVoid()
 		);
 		if(DEBUG) log.info("reset_context:"+Llama3.resetContextMH);
 		//EXPORT int get_token_bos();
 		Llama3.getTokenBOSMH = linker.downcallHandle(
-		        lookup.find("get_token_bos").get(),
+		        lookup.find("get_token_bos").orElseThrow(),
 		        FunctionDescriptor.of(
 		    	ValueLayout.JAVA_INT)
 		);
 		if(DEBUG) log.info("get_token_bos:"+Llama3.getTokenBOSMH);
 		//EXPORT int get_token_eos();
 		Llama3.getTokenEOSMH = linker.downcallHandle(
-		        lookup.find("get_token_eos").get(),
+		        lookup.find("get_token_eos").orElseThrow(),
 		        FunctionDescriptor.of(
 		    	ValueLayout.JAVA_INT)
 		);
 		if(DEBUG) log.info("get_token_eos:"+Llama3.getTokenEOSMH);
 		//EXPORT int get_token_eot();
 		Llama3.getTokenEOTMH = linker.downcallHandle(
-		        lookup.find("get_token_eot").get(),
+		        lookup.find("get_token_eot").orElseThrow(),
 		        FunctionDescriptor.of(
 		    	ValueLayout.JAVA_INT)
 		);

@@ -4,22 +4,29 @@ import java.io.Externalizable;
 import java.io.IOException;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.GroupLayout;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemoryLayout.PathElement;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.charset.StandardCharsets;
+
 import java.util.Arrays;
 import java.util.List;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 /**
  * Tensor of ChatFormat.message, backed by MemorySegment, implementing Comparable and Externalizable
  * @author Jonathan Groff Copyright (C) NeoCoreTechs 2025
  */
 public class MessageTensor implements Externalizable, Comparable {
-	public static boolean DEBUG = false;
+	private static final Log log = LogFactory.getLog(MessageTensor.class);
+	public static boolean DEBUG = true;
 	MemorySegment memorySegment;
+	private int totalMessageSize;
+	private int totalMessages;
 
 	static final GroupLayout LLAMA_CHAT_MESSAGE = MemoryLayout.structLayout(
 	        ValueLayout.ADDRESS.withName("role"),
@@ -27,6 +34,11 @@ public class MessageTensor implements Externalizable, Comparable {
 	);
 	
 	public MessageTensor() {}
+	
+	public MessageTensor(List<ChatFormat.Message> dialog) {
+		this.totalMessageSize = allocate(dialog);
+		this.totalMessages = dialog.size();
+	}
 	
 	public MemorySegment getSegment() {
 		return memorySegment;
@@ -48,7 +60,11 @@ public class MessageTensor implements Externalizable, Comparable {
 	public static StringTensor allocOutput(int totalMsgSize) {
 		return new StringTensor(new byte[totalMsgSize*2+1024]);
 	}
-	
+	/**
+	 * Allocate the list of messages to the memorySegment
+	 * @param msgs list of dialog messages
+	 * @return calculated number of bytes of all content
+	 */
 	public int allocate(List<ChatFormat.Message> msgs) {
 		memorySegment = getArena().allocate(LLAMA_CHAT_MESSAGE, msgs.size());
 		int totalMsgSize = 0;
@@ -71,16 +87,40 @@ public class MessageTensor implements Externalizable, Comparable {
 		return totalMsgSize;
 	}
 	
-	public String applyChatTemplate(List<ChatFormat.Message> msgs, boolean addAssistantPrompt) {
+	/**
+	 * Factory method to create new MessageTensor, allocate listof messages, and apply template
+	 * @param msgs list of dialog messages
+	 * @param addAssistantPrompt true to add blank preemptive assistant section at end of dialog
+	 * @return the String with templated dialog
+	 */
+	public static String applyChatTemplate(List<ChatFormat.Message> msgs, boolean addAssistantPrompt) {
 	    // 1. Build llama_chat_message[] in native memory
 	    MessageTensor chatTensor = new MessageTensor();
 	    int totalMsgSize = chatTensor.allocate(msgs); // alloc + fills struct array
 	    // 2. Allocate output buffer
 	    StringTensor out = MessageTensor.allocOutput(totalMsgSize);
 	    int bufLen = out.size();                                 // len
-	    DeviceManager.applyChatTemplate(chatTensor, out, msgs.size(), bufLen, addAssistantPrompt);
+	    int allocated = DeviceManager.applyChatTemplate(chatTensor, out, msgs.size(), bufLen, addAssistantPrompt);
+	    if(DEBUG)
+	    	log.info("MessageTensor.applyChatTemplate allocated="+allocated);
 	    // 3. Convert UTF8 C string in out.buffer to Java String
 	    return out.toString();
+	}
+	
+	/**
+	 * Method to apply template to allocated list of Messages
+	 * @param addAssistantPrompt true to add blank preemptive assistant section at end of dialog
+	 * @return the StringTensor with templated dialog
+	 */
+	public StringTensor applyChatTemplate(boolean addAssistantPrompt) {
+	    // 2. Allocate output buffer
+	    StringTensor out = MessageTensor.allocOutput(this.totalMessageSize);
+	    int bufLen = out.size();
+	    int allocated = DeviceManager.applyChatTemplate(this, out, this.totalMessages, bufLen, addAssistantPrompt);
+	    if(DEBUG)
+		    log.info(this.getClass().getName()+".applyChatTemplate allocated="+allocated);
+	    // 3. Convert UTF8 C string in out.buffer to Java String
+	    return out;
 	}
 	
 	public Arena getArena() {

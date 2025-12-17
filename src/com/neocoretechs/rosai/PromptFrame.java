@@ -5,10 +5,14 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 /**
  * Encapsulates ChatFormatInterface tokenizer and manages raw and formatted token lists
  */
 public final class PromptFrame {
+	private static final Log log = LogFactory.getLog(PromptFrame.class);
 	private ChatFormat.Message message;
 	private final ChatFormat chatFormat;
 	private Collection<? extends Integer> rawTokens;
@@ -19,18 +23,20 @@ public final class PromptFrame {
 	}
 	public void setMessage(ChatFormat.Message message) {
 		this.message = message;
-		this.rawTokens = chatFormat.encodeAsCollection(message.content());//chatFormat.stripFormatting(message.content()));
-		this.formattedTokens = chatFormat.encodeMessage(message); // Includes headers + role
+		this.rawTokens = DeviceManager.encode(message.content());//chatFormat.stripFormatting(message.content()));
+		this.formattedTokens = DeviceManager.encode(message.toString()); // Includes headers + role
 	}
 	public List<Integer> getFormattedTokens() {
 		return formattedTokens;
 	}
+	/*
 	public int getBeginOfTextToken() {
 		return chatFormat.getBeginOfText();
 	}
 	public Set<Integer> getStopTokens() {
 		return chatFormat.getStopTokens();
 	}
+	*/
 	public ChatFormat.Message getMessage() {
 		return message;
 	}

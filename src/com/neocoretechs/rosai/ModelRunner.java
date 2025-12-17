@@ -66,11 +66,16 @@ import diagnostic_msgs.DiagnosticStatus;
 import diagnostic_msgs.KeyValue;
 
 import com.neocoretechs.rocksack.Alias;
-
+/**
+ * Execute the ROSJavaLite node processing in coming messages from the various subscriptions, format them, and route them
+ * to the model runner for processing. Maintain the context via the LSH indexing and semantic retrieval. Call out to
+ * Llama.cpp via the FFI and {@link DeviceManager} methods.
+ * @author Jonathan Groff Copyright (C) NeoCoreTechs 2025
+ */
 public class ModelRunner extends AbstractNodeMain {
 	private static final Log log = LogFactory.getLog(ModelRunner.class);
 	// Batch-size used in prompt evaluation.
-	public final static boolean DEBUG = false;
+	public final static boolean DEBUG = true;
 	public static boolean DISPLAY_METADATA = false;
 	AsynchRelatrixClientTransaction dbClient = null;
 	//static RelatrixTransaction dbClient = null;
@@ -80,6 +85,7 @@ public class ModelRunner extends AbstractNodeMain {
 	public static BufferedWriter outputStream = null;
 	public static PrintWriter output = null;
 	public static FileWriter fileWriter = null;
+	private static boolean onceThrough = false;
 
 	PromptFrame promptFrame = null;
 	public static final String SYSTEM_PROMPT = "/system_prompt";
@@ -245,7 +251,7 @@ public class ModelRunner extends AbstractNodeMain {
 				// set up the preamble system directives
 				promptFrame = new PromptFrame(chatFormat);
 				List<Integer> promptTokens = new ArrayList<>();
-				promptTokens.add(chatFormat.getBeginOfText());
+				//promptTokens.add(chatFormat.getBeginOfText());
 				List<ChatFormat.Message> prompts = SystemPrompts.getSystemMessages();
 				promptTokens.addAll(chatFormat.encodeDialogPrompt(true, prompts));
 				Optional<String> response = processMessage(promptTokens);
@@ -435,7 +441,6 @@ public class ModelRunner extends AbstractNodeMain {
 	} // onStart
 
 	public static Optional<String> processMessage(List<Integer> promptTokens ) {
-		Set<Integer> stopTokens = chatFormat.getStopTokens();
 		//List<Integer> responseTokens = Llama3.generateTokens(0, promptTokens, stopTokens, Llama3.options.getMaxTokens(), Llama3.options.echo(), null);
  		IntTensor retTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
@@ -446,20 +451,23 @@ public class ModelRunner extends AbstractNodeMain {
         StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
 		try(Timer _ = Timer.log("run model interactive")) {
 			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
-			System.out.println("Returned Tokens="+tokNum);
+			if(DEBUG)
+				log.info("Returned Tokens="+tokNum);
 		}
 		if(tokNum == -1) {
 			log.error("Context length exceeded, exiting");
 			return Optional.empty();
 		}
 		List<Integer> retTokenList = retTokens.toList();
-		if (!retTokenList.isEmpty() && stopTokens.contains(retTokenList.getLast())) {
+		if (!retTokenList.isEmpty() && ChatFormat.stopTokens.contains(retTokenList.getLast())) {
 			retTokenList.removeLast();
 		}
 		String cleanString = DeviceManager.decode(retTokenList);
-		System.out.println("Raw returned prompt len="+cleanString.length());
+		if(DEBUG)
+			log.info("Raw returned prompt len="+cleanString.length());
 		cleanString = cleanString.trim();
-		log.info(cleanString);
+		if(DEBUG)
+			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
 		if(cleanString.length() == 0)
 			return Optional.empty();
         ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, cleanString);
@@ -473,11 +481,12 @@ public class ModelRunner extends AbstractNodeMain {
 	 */
 	private void processRole(String message, ChatFormat.Role role) {
 		if(message.trim().length() == 0) {
-			log.info(role+" message empty...");
+			if(DEBUG)
+				log.info(role+" message empty...");
 			return;
 		}
 		List<Integer> promptTokens = new ArrayList<>();
-		promptTokens.add(chatFormat.getBeginOfText());
+		//promptTokens.add(chatFormat.getBeginOfText());
 		ChatFormat.Message chatMessage = new ChatFormat.Message(role, message);
 		promptFrame.setMessage(chatMessage);
 		List<Integer> userMessage = new ArrayList<Integer>(promptFrame.getRawTokens());
@@ -503,6 +512,11 @@ public class ModelRunner extends AbstractNodeMain {
 			try {
 				messageQueue.addLastWait(response.get());
 			} catch(InterruptedException ie) {}
+		}
+		try(Timer _ = Timer.log("reset context")) {
+			if(onceThrough)
+				DeviceManager.resetContext();
+			onceThrough = true;
 		}
 	}
 	/**
