@@ -90,11 +90,10 @@ public class Llama3 {
         			log.error("Context length exceeded, exiting");
         			break;
         		}
-        		StringTensor toks = new StringTensor(new byte[options.getMaxTokens()]);
-        		int strLen = DeviceManager.tokenToString(retTokens, tokNum, toks);
-        		System.out.println("returned prompt len="+strLen);
-        		System.out.println(toks.toString().substring(0,strLen));
-                responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, toks.toString().substring(0,strLen));
+        		String str = DeviceManager.decode(retTokens.toList());
+        		System.out.println("returned prompt len="+str.length());
+        		System.out.println(str);
+                responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, str);
                 dialog.add(responseMessage);
             }
             in.close();

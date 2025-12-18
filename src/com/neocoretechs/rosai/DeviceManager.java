@@ -47,7 +47,8 @@ public final class DeviceManager {
 			throw new RuntimeException(e);
 		}
 	}
-	public static int stringToToken(StringTensor inStr, IntTensor retToken) {
+	
+	private static int stringToToken(StringTensor inStr, IntTensor retToken) {
 		MemorySegment hostSeg = inStr.getSegment();
 		long addr = hostSeg.address();
 		MemorySegment tokSegment = retToken.getSegment();
@@ -58,27 +59,13 @@ public final class DeviceManager {
 			throw new RuntimeException(e);
 		}	
 	}
-	public static int tokenToString(IntTensor inTokens, int size, StringTensor retStrings) {
-		List<Integer> findEot = inTokens.toList();
-		int endSize = size;
+	private static int tokenToString(IntTensor inTokens, int size, StringTensor retStrings) {
 		MemorySegment hostSeg = inTokens.getSegment();
-		for(int i = 0; i < findEot.size(); i++) {
-			if(ChatFormat.stopTokens.contains(findEot.get(i))) {
-				IntTensor newInt;
-				if(findEot.size() == i+1)
-					newInt = new IntTensor(findEot.subList(0, i+1));
-				else
-					newInt = new IntTensor(findEot.subList(0, i+2));
-				hostSeg = newInt.getSegment();
-				endSize = newInt.size();
-			}
-		}
-		
 		long addr = hostSeg.address();
 		MemorySegment tokSegment = retStrings.getSegment();
 		long addr2 = tokSegment.address();
 		try {
-			return (int) Llama3.tokenToStringMH.invokeExact(addr, endSize, addr2);
+			return (int) Llama3.tokenToStringMH.invokeExact(addr, size, addr2);
 		} catch (Throwable e) {
 			throw new RuntimeException(e);
 		}	
@@ -96,7 +83,10 @@ public final class DeviceManager {
 		IntTensor itt = new IntTensor(it);
 		StringTensor retStringTensor = new StringTensor(new byte[Llama3.options.getMaxTokens()]);
 		int strLen = tokenToString(itt, it.size(), retStringTensor);
-		String retString = retStringTensor.toString().substring(0,strLen-1);
+		String retString = retStringTensor.toString();
+		strLen = retString.indexOf("<|eot_id|>");
+		if(strLen != -1)
+			retString = retString.substring(0,strLen+10);
 		return retString.trim();
 	}
 	

@@ -171,13 +171,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			Integer combinedHash = hash(hashTable.get(i), normalizedQuery);
 			iq.add(combinedHash);
 		}
-		try (var _ = Timer.log("Querying combined hash for table of "+hashTable.size())) {
+		//try (var _ = Timer.log("Querying combined hash for table of "+hashTable.size())) {
 			CompletableFuture<List> cres = dbClient.findSetParallel(xid, iq, '?', '?');
 			res = cres.get();
 			//for(Result r: res) {
 			// should be NoIndex values
 			//}
-		}
+		//}
 		return res;
 	}
 	/**
@@ -198,10 +198,10 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	public List<Result> queryParallel2(List<Object> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> res = null;
-		try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
+		//try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
 			CompletableFuture<List> cres = dbClient.findSetParallel(xid, query, '?', '?');
 			res = cres.get();
-		}
+		//}
 		return res;
 	}
 	/**
@@ -248,7 +248,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public void addInteraction(Long ts, ChatFormat.Role initiator, List<Integer> userMessage, List<Integer> responseTokens) {
 		TimestampRole tr_assistant = new TimestampRole(ts, ChatFormat.Role.ASSISTANT);
 		TimestampRole tr_user = new TimestampRole(ts, initiator);
-		try(Timer _ = Timer.log("addInteraction: SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
+		//try(Timer _ = Timer.log("addInteraction: SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
 			try {
 				add(tr_user, userMessage);
 				add(tr_assistant, responseTokens);
@@ -258,7 +258,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				return;
 			}
 			dbClient.commit(xid); // Only after both store ops succeed
-		}
+		//}
 	}	
 	/**
 	 * Add a vector to the index. Create a UUID and store the vector in a K/V datastore, use the UUID to
@@ -294,11 +294,11 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws ClassNotFoundException asychronous database client exception
 	 * @throws IllegalArgumentException asychronous database client exception
 	 */
-	public List<ChatFormat.Message> findNearest(PromptFrame promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
+	public List<ChatFormat.Message> findNearest(ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> nearest = null;
-		List<Integer> results = (List<Integer>)promptFrame.getRawTokens();
+		List<Integer> results = (List<Integer>)promptFrame.encode();
 		if(DEBUG)
-			log.info("findNearest User query has "+results.size()+" tokens");
+			log.info("findNearest User query has "+results.size()+" tokens from "+promptFrame);
 		List<ChatFormat.Message> returns = new ArrayList<ChatFormat.Message>();
 
 		FloatTensor fmessage = normalize(results);
@@ -326,7 +326,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			// we could have come up index and timestamp empty
 			if(nearest == null || nearest.isEmpty()) {
 				// put most recent user query last
-				returns.add(promptFrame.getMessage());
+				returns.add(promptFrame);
 				if(DEBUG)
 					log.info("findNearest Returning from empty index and timestamp query with original prompt");
 				return returns;
@@ -467,7 +467,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			}
 		}
 		// put most recent user query last
-		returns.add(promptFrame.getMessage());
+		returns.add(promptFrame);
 		return returns;
 	}
 	/**
@@ -556,14 +556,14 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		ArrayList<Result> res = new ArrayList<Result>();
 		TimestampRole lastTime = (TimestampRole) dbClient.last(xid, TimestampRole.class).get();
 		if(lastTime != null) {
-			try (var _ = Timer.log("primeByTime Querying by time "+ LocalDateTime.ofInstant(Instant.ofEpochMilli(lastTime.getTimestamp()), ZoneId.systemDefault()))) {
+			//try (var _ = Timer.log("primeByTime Querying by time "+ LocalDateTime.ofInstant(Instant.ofEpochMilli(lastTime.getTimestamp()), ZoneId.systemDefault()))) {
 				CompletableFuture<Iterator> cres = dbClient.findSet(xid, '?', lastTime, '*');
 				Iterator<?> it = cres.get();
 				while(it.hasNext()) {
 					// should be LSH index, NoIndex List<Integer> vector values
 					res.add((Result) it.next());
 				}
-			}
+			//}
 		}
 		if(DEBUG)
 			log.info("primeByTime returned "+res.size()+" results.");

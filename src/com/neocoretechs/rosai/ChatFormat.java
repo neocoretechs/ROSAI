@@ -1,5 +1,6 @@
 package com.neocoretechs.rosai;
 
+import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -33,11 +34,9 @@ public class ChatFormat {
 			//endOfTurn = (int) Llama3.getTokenEOTMH.invokeExact();
 			endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();
 			//System.out.println("eot="+endOfTurn+" eos="+endOfSentence);
-			StringTensor buf = new StringTensor("<|eot_id|>");
-			IntTensor it = IntTensor.allocate(8);
-			DeviceManager.stringToToken(buf, it);
-			endOfText = it.getInt(0);
-			endOfTurn = it.getInt(1);
+			List<Integer> it = DeviceManager.encode("<|eot_id|>");
+			endOfText = it.get(0);
+			endOfTurn = it.get(1);
 			//System.out.println("eot="+endOfTurn+" eoText="+endOfText+" int[0]="+it.getInt(0));
 			stopTokens = Set.of(endOfText, endOfTurn);
 		} catch (Throwable e) {
@@ -51,12 +50,12 @@ public class ChatFormat {
 	 * @param dialog List of messages to tokenize
 	 * @return the tokenized list of templatized messages
 	 */
-	public List<Integer> encodeDialogPrompt(boolean appendAssistantTurn, List<ChatFormat.Message> dialog) {
+	public static List<Integer> encodeDialogPrompt(boolean appendAssistantTurn, List<ChatFormat.Message> dialog) {
 		MessageTensor mt = new MessageTensor(dialog);
 		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
 		String resStr = st.toString();
 		if(DEBUG)
-			log.info(this.getClass().getName()+".encodeDialogPrompt="+resStr);
+			log.info("ChatFormat.encodeDialogPrompt="+resStr);
 		return DeviceManager.encode(resStr);
 	}
 	/**
@@ -65,34 +64,47 @@ public class ChatFormat {
 	 * @param dialog list of messages to process
 	 * @return the StringTensor of templatized messages
 	 */
-	public StringTensor extractDialogPrompt(boolean appendAssistantTurn, List<Message> dialog) {
+	public static StringTensor extractDialogPrompt(boolean appendAssistantTurn, List<Message> dialog) {
 		MessageTensor mt = new MessageTensor(dialog);
 		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
 		if(DEBUG)
-			log.info(this.getClass().getName()+".extractDialogPrompt="+st.toString());
+			log.info("ChatFormat.extractDialogPrompt="+st.toString());
 		return st;
 	}
 
-	private String stripFormatting(String input) {
+	String stripFormatting(String input) {
 		return input.replaceAll("<\\|.*?\\|>", "")
 				.replaceAll("\\*+", "")
 				.replaceAll("(?m)^USER:|AI:", "")
 				.trim();
 	}
-
+	
+	/**
+	 * Message record. 
+	 */
 	public record Message(ChatFormat.Role role, String content) {
 		@Override
 		public String toString() {
+			return String.format("[%s] %s", role, content);
+		}
+		public List<Integer> encode() { return encode(false); }
+		public List<Integer> encode(boolean appendAssistant) {
 			ArrayList<Message> tr = new ArrayList<Message>(1);
 			tr.add(this);
-			return MessageTensor.applyChatTemplate(tr, false);
+			return encodeDialogPrompt(appendAssistant, tr);
+		}
+		public String applyChatTemplate() { return applyChatTemplate(false); }
+		public String applyChatTemplate(boolean appendAssistant) {
+			ArrayList<Message> tr = new ArrayList<Message>(1);
+			tr.add(this);
+			return MessageTensor.applyChatTemplate(tr, appendAssistant);
 		}
 	}
 
 	public enum Role {
-		SYSTEM("SYSTEM"),
-		USER("USER"),
-		ASSISTANT("ASSISTANT");
+		SYSTEM("system"),
+		USER("user"),
+		ASSISTANT("assistant");
 		private final String role;
 		Role(String role) {
 			this.role = role;
@@ -197,15 +209,11 @@ public class ChatFormat {
 		return replaceControlCharacters(str.codePoints().toArray());
 	}
 
-	private List<Integer> encodeAsList(String text) {
-		StringTensor st = new StringTensor(text);
-		IntTensor it = IntTensor.allocate(2048);
-		int toks = DeviceManager.stringToToken(st, it);
-		IntTensor trimToks = new IntTensor(it, toks);
-		return Arrays.stream(trimToks.toArray()).boxed().toList();
+	static List<Integer> encodeAsList(String text) {
+		return DeviceManager.encode(text);
 	}
 
-	private Collection<? extends Integer> encodeAsCollection(String text) {
+	static Collection<? extends Integer> encodeAsCollection(String text) {
 		return encodeAsList(text);
 	}
 	

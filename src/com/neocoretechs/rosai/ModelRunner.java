@@ -87,7 +87,6 @@ public class ModelRunner extends AbstractNodeMain {
 	public static FileWriter fileWriter = null;
 	private static boolean onceThrough = false;
 
-	PromptFrame promptFrame = null;
 	public static final String SYSTEM_PROMPT = "/system_prompt";
 	public static final String USER_PROMPT = "/user_prompt";
 	public static final String ASSIST_PROMPT = "/assist_prompt";
@@ -102,7 +101,6 @@ public class ModelRunner extends AbstractNodeMain {
 	static long lastImageTime = System.currentTimeMillis();
 
 	static RelatrixLSH relatrixLSH = null;
-	static ChatFormat chatFormat = null;
 
 	static class EulerTime {
 		sensor_msgs.Imu euler;
@@ -202,6 +200,10 @@ public class ModelRunner extends AbstractNodeMain {
 
 	@Override
 	public void onStart(final ConnectedNode connectedNode) {
+		Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+		    System.err.println("Uncaught in thread " + t + ": " + e);
+		    e.printStackTrace();
+		});
 		SynchronizedThreadManager.getInstance().init(new String[] {"LLM","DB"});
 		NativeLoader.loadMethods();
 		//
@@ -220,10 +222,9 @@ public class ModelRunner extends AbstractNodeMain {
 		//
 		Llama3.options = Options.parseOptions(opts);
 		StringTensor s = new StringTensor(Llama3.options.modelPath().toString());
-		try(Timer _ = Timer.log("load model")) {
+		//try(Timer _ = Timer.log("load model")) {
 			DeviceManager.loadModel(s, Llama3.options.getMaxTokens());
-		}
-		chatFormat = new ChatFormat();
+		//}
 		try {
 			dbClient = connectedNode.getRelatrixClient();
 			//dbClient.setTablespace("D:/etc/Relatrix/db/test/ai");
@@ -249,20 +250,16 @@ public class ModelRunner extends AbstractNodeMain {
 				relatrixLSH = new RelatrixLSH(dbClient, Llama3.options.getMaxTokens());
 				// Chat format seems solely based on individual model, so we extract a name in model loader from Metada general.name
 				// set up the preamble system directives
-				promptFrame = new PromptFrame(chatFormat);
 				List<Integer> promptTokens = new ArrayList<>();
 				//promptTokens.add(chatFormat.getBeginOfText());
 				List<ChatFormat.Message> prompts = SystemPrompts.getSystemMessages();
-				promptTokens.addAll(chatFormat.encodeDialogPrompt(true, prompts));
+				promptTokens.addAll(ChatFormat.encodeDialogPrompt(false, prompts));
 				Optional<String> response = processMessage(promptTokens);
 				if(response.isPresent() && response.get().length() > 0) {
 					if(DEBUG)
 						log.info("***Queueing from system preamble:"+response.get());
 					ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
-					PromptFrame responseFrame = new PromptFrame(chatFormat);
-					responseFrame.setMessage(responseMessage);
-					List<Integer> responseTokens = (List<Integer>)responseFrame.getRawTokens();
-					relatrixLSH.addInteraction(System.currentTimeMillis(), ChatFormat.Role.SYSTEM, promptTokens, responseTokens);
+					relatrixLSH.addInteraction(System.currentTimeMillis(), ChatFormat.Role.SYSTEM, promptTokens, responseMessage.encode());
 					try {
 						messageQueue.addLastWait(response.get());
 					} catch(InterruptedException ie) {}
@@ -273,7 +270,7 @@ public class ModelRunner extends AbstractNodeMain {
 						String fileName = Llama3.options.modelPath().getFileName().toString();
 						int dotIndex = fileName.lastIndexOf('.');     
 						fileName = (dotIndex == -1) ? fileName : fileName.substring(0, dotIndex);
-						SystemPrompts.frontloadDb(relatrixLSH, chatFormat, fileName+".txt");
+						SystemPrompts.frontloadDb(relatrixLSH, fileName+".txt");
 					} catch (IOException e) {
 						e.printStackTrace();
 					}
@@ -439,29 +436,32 @@ public class ModelRunner extends AbstractNodeMain {
 			}
 		});
 	} // onStart
-
+	
+	/**
+	 * Present the tokenized prompt and perform forward inference using native Llama.cpp callout. Get back the response token list and process it.
+	 * @param promptTokens List of prompt tokens
+	 * @return The dialog as Optional String
+	 */
 	public static Optional<String> processMessage(List<Integer> promptTokens ) {
-		//List<Integer> responseTokens = Llama3.generateTokens(0, promptTokens, stopTokens, Llama3.options.getMaxTokens(), Llama3.options.echo(), null);
  		IntTensor retTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
         List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
         String userText = DeviceManager.decode(promptTokens);
         ChatFormat.Message promptMessage = new ChatFormat.Message(ChatFormat.Role.USER, userText);
         dialog.add(promptMessage);
-        StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
-		try(Timer _ = Timer.log("run model interactive")) {
+        StringTensor p = ChatFormat.extractDialogPrompt(true, dialog);
+        if(DEBUG)
+        	log.info("ModelRunner.processMessage sending dialog to inference:"+p);
+		//try(Timer _ = Timer.log("run model interactive")) {
 			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
 			if(DEBUG)
 				log.info("Returned Tokens="+tokNum);
-		}
+		//}
 		if(tokNum == -1) {
 			log.error("Context length exceeded, exiting");
 			return Optional.empty();
 		}
 		List<Integer> retTokenList = retTokens.toList();
-		if (!retTokenList.isEmpty() && ChatFormat.stopTokens.contains(retTokenList.getLast())) {
-			retTokenList.removeLast();
-		}
 		String cleanString = DeviceManager.decode(retTokenList);
 		if(DEBUG)
 			log.info("Raw returned prompt len="+cleanString.length());
@@ -471,7 +471,7 @@ public class ModelRunner extends AbstractNodeMain {
 		if(cleanString.length() == 0)
 			return Optional.empty();
         ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, cleanString);
-		return Optional.ofNullable(responseMessage.toString());
+		return Optional.ofNullable(responseMessage.applyChatTemplate());
 	}
 	/**
 	 * Process the given interaction using the role provided, beginning with model.CreateNewState
@@ -485,39 +485,40 @@ public class ModelRunner extends AbstractNodeMain {
 				log.info(role+" message empty...");
 			return;
 		}
-		List<Integer> promptTokens = new ArrayList<>();
-		//promptTokens.add(chatFormat.getBeginOfText());
 		ChatFormat.Message chatMessage = new ChatFormat.Message(role, message);
-		promptFrame.setMessage(chatMessage);
-		List<Integer> userMessage = new ArrayList<Integer>(promptFrame.getRawTokens());
 		List<ChatFormat.Message> responses = null;
 		try {
-			responses = relatrixLSH.findNearest(promptFrame);
+			responses = relatrixLSH.findNearest(chatMessage);
 		} catch (IllegalArgumentException | ClassNotFoundException | IllegalAccessException | IOException | InterruptedException | ExecutionException e) {
 			e.printStackTrace();
 			responses = new ArrayList<ChatFormat.Message>();
 		}
-		promptTokens.addAll(chatFormat.encodeDialogPrompt(true, responses));
-		if(DEBUG)
-			log.info("***User FindNearest returned:"+ DeviceManager.decode(promptTokens));
-		Optional<String> response = processMessage(promptTokens);
+		if(DEBUG) {
+			StringBuilder sb = new StringBuilder("Responses:\n");
+			for(int i = 0; i < responses.size(); i++) {
+				sb.append(i);
+				sb.append(".) ");
+				sb.append(responses.get(i));
+				sb.append("\n");
+			}
+			log.info(sb.toString());
+		}
+		responses.add(chatMessage);
+		Optional<String> response = processMessage(ChatFormat.encodeDialogPrompt(true, responses));
 		if(response.isPresent() && response.get().trim().length() > 0) {
 			if(DEBUG)
 				log.info("***Queueing from role USER:"+response.get());
 			ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
-			PromptFrame responseFrame = new PromptFrame(chatFormat);
-			responseFrame.setMessage(responseMessage);
-			List<Integer> responseTokens = (List<Integer>)responseFrame.getRawTokens();
-			relatrixLSH.addInteraction(System.currentTimeMillis(), role, userMessage, responseTokens);
+			relatrixLSH.addInteraction(System.currentTimeMillis(), role, chatMessage.encode(), responseMessage.encode());
 			try {
 				messageQueue.addLastWait(response.get());
 			} catch(InterruptedException ie) {}
 		}
-		try(Timer _ = Timer.log("reset context")) {
+		//try(Timer _ = Timer.log("reset context")) {
 			if(onceThrough)
 				DeviceManager.resetContext();
 			onceThrough = true;
-		}
+		//}
 	}
 	/**
 	 * Intercept the model output and generate a movement command to be published to the {@link com.neocoretechs.robocore.propulsion.MotionController}
