@@ -29,7 +29,7 @@ public class ChatFormat {
 	public static int endOfSentence;
 	public static int endOfText;
 	public static Set<Integer> stopTokens;
-	public ChatFormat() {
+	static {
 		try {
 			//endOfTurn = (int) Llama3.getTokenEOTMH.invokeExact();
 			endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();

@@ -70,7 +70,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 
 	/**
 	 * Contains the mapping between a combination of a number of hashes (encoded
-	 * using an integer) and a list of possible nearest neighbours
+	 * using an integer) and a list of possible nearest neighbors
 	 */
 	private List<CosineHash[]> hashTable;
 	private UUID key;

@@ -55,9 +55,9 @@ public class Llama3 {
         NativeLoader.loadMethods();
         options = Options.parseOptions(args);
 		StringTensor s = new StringTensor(options.modelPath().toString());
-		try(Timer _ = Timer.log("load model")) {
+		//try(Timer _ = Timer.log("load model")) {
 			DeviceManager.loadModel(s, options.getMaxTokens());
-		}
+		//}
 
         if (options.interactive()) {
             ChatFormat chatFormat = new ChatFormat();
@@ -82,10 +82,10 @@ public class Llama3 {
         		System.out.println("prompt:"+p);
         		int tokNum = 0;
         		IntTensor retTokens = IntTensor.allocate(options.getMaxTokens());
-        		try(Timer _ = Timer.log("run model interactive")) {
+        		//try(Timer _ = Timer.log("run model interactive")) {
         			tokNum = DeviceManager.runModelTokenize(p, options.temperature(), options.minp(), options.topp(), retTokens);
         			System.out.println("Returned Tokens="+tokNum);
-        		}
+        		//}
         		if(tokNum == -1) {
         			log.error("Context length exceeded, exiting");
         			break;
@@ -101,10 +101,10 @@ public class Llama3 {
         	StringTensor p = new StringTensor(options.prompt());
     		System.out.println("prompt:"+p);
     		IntTensor it = IntTensor.allocate(2048);
-    		try(Timer _ = Timer.log("run model")) {
+    		//try(Timer _ = Timer.log("run model")) {
     			int tokNum = DeviceManager.runModel(p, options.temperature(), options.minp(), options.topp(), it);
     			System.out.println("Tokens="+tokNum);
-    		}
+    		//}
         }
     }
 }

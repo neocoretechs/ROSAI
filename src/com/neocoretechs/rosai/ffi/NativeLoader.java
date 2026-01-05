@@ -5,11 +5,13 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
+import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import com.neocoretechs.rocksack.session.DatabaseManager;
 import com.neocoretechs.rosai.Llama3;
 
 public final class NativeLoader {
@@ -25,11 +27,13 @@ public final class NativeLoader {
 	private static final AtomicReference<LibraryState> libraryLoaded = new AtomicReference<>(LibraryState.NOT_LOADED);
 
 	static {
-			NativeLoader.loadLibrary(new File(System.getProperty("java.library.path")).list());
+		NativeLoader.loadLibrary(new File(System.getProperty("java.library.path")).list());
 	}
-
+	
 	public static void load() {
-			NativeLoader.loadLibrary(new File(System.getProperty("java.library.path")).list());
+		NativeLoader.loadLibrary(new File(System.getProperty("java.library.path")).list());
+		if(DEBUG)
+			log.info("load complete..");
 	}
 	
 	/**
@@ -47,12 +51,16 @@ public final class NativeLoader {
 				//.out.println("Loading from paths list of length:"+paths.size());
 				for (final String path : paths) {
 					//if(DEBUG) log.info(path);
-					if(path.endsWith(".so") || path.endsWith(".dll")) {
-						String fname = new File(path).getName();
-						fname = fname.substring(0,fname.indexOf("."));
+					if((path.endsWith(".so") || path.endsWith(".dll")) && !path.contains("rocksdb")) {
+						//String fname = new File(path).getName();
+						//fname = fname.substring(0,fname.indexOf("."));
+						//if(DEBUG)
+						//	log.info("Trying load for:"+fname);
+						//System.loadLibrary(fname);
+						Path p = Path.of(System.getProperty("java.library.path"),path).toAbsolutePath();
 						if(DEBUG)
-							log.info("Trying load for:"+fname);
-						System.loadLibrary(fname);
+							log.info("Attempting load for "+p.toString());
+						System.load(p.toString());
 					}
 				}
 			}
@@ -65,12 +73,13 @@ public final class NativeLoader {
 			} catch(final InterruptedException e) {}
 		}
 	}
-
+	
 	public static void loadMethods() {
 		Linker linker = Linker.nativeLinker();
 		//if(DEBUG) log.info("linker:"+linker);
 		SymbolLookup lookup = SymbolLookup.loaderLookup();
 		//if(DEBUG) log.info("Loader:"+lookup);
+		/*
 		Llama3.cudaGetMemInfo = linker.downcallHandle(
 				lookup.find("cudaGetMemInfo").orElseThrow(),
 				FunctionDescriptor.ofVoid(
@@ -84,6 +93,7 @@ public final class NativeLoader {
 		                                  ValueLayout.JAVA_LONG) // size_t bytes
 		    );
 			if(DEBUG) log.info("copyFromNative:"+Llama3.copyFromNativeMH);
+			*/
 		Llama3.loadModelMH = linker.downcallHandle(
 			        lookup.find("load_model").orElseThrow(),
 			        FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG, // uint8_t* tensor model path

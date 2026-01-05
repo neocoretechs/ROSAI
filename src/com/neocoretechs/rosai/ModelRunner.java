@@ -30,6 +30,7 @@ import java.time.format.DateTimeFormatter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -75,7 +76,7 @@ import com.neocoretechs.rocksack.Alias;
 public class ModelRunner extends AbstractNodeMain {
 	private static final Log log = LogFactory.getLog(ModelRunner.class);
 	// Batch-size used in prompt evaluation.
-	public final static boolean DEBUG = true;
+	public static boolean DEBUG = true;
 	public static boolean DISPLAY_METADATA = false;
 	AsynchRelatrixClientTransaction dbClient = null;
 	//static RelatrixTransaction dbClient = null;
@@ -85,17 +86,21 @@ public class ModelRunner extends AbstractNodeMain {
 	public static BufferedWriter outputStream = null;
 	public static PrintWriter output = null;
 	public static FileWriter fileWriter = null;
-	private static boolean onceThrough = false;
+	private static boolean onceThrough = false; // context reset flag
+	private static boolean shouldRun = true; // main incoming queue processing thread control flag
 
 	public static final String SYSTEM_PROMPT = "/system_prompt";
 	public static final String USER_PROMPT = "/user_prompt";
 	public static final String ASSIST_PROMPT = "/assist_prompt";
 	public static final String LLM = "/model";
 
-	CircularBlockingDeque<String> messageQueue = new CircularBlockingDeque<String>(1024);
+	CircularBlockingDeque<String> outgoingMessageQueue = new CircularBlockingDeque<>(1024);
+	CircularBlockingDeque<ChatFormat.Message> incomingMessageQueue = new CircularBlockingDeque<>(1024);
 
 	protected Object mutex = new Object();
-	protected CountDownLatch dbLatch = new CountDownLatch(1);
+	protected static CountDownLatch dbLatch = new CountDownLatch(1); // barrier synch database init
+	private static boolean modelLoaded = false; // model loaded flag
+	static final String REMAP_DEBUG = "__debug"; // command line remapping variable set to boolean true for DEBUG=true
 
 	static long MESSAGE_THRESHOLD = 5000; // ms minimum between subscribed message reception
 	static long lastImageTime = System.currentTimeMillis();
@@ -204,6 +209,11 @@ public class ModelRunner extends AbstractNodeMain {
 		    System.err.println("Uncaught in thread " + t + ": " + e);
 		    e.printStackTrace();
 		});
+		Map<String, String> remaps = connectedNode.getNodeConfiguration().getCommandLineLoader().getSpecialRemappings();
+		if( remaps.containsKey(REMAP_DEBUG) )
+			if(remaps.get(REMAP_DEBUG).equals("true")) {
+				DEBUG = true;
+			}
 		SynchronizedThreadManager.getInstance().init(new String[] {"LLM","DB"});
 		NativeLoader.loadMethods();
 		//
@@ -223,7 +233,19 @@ public class ModelRunner extends AbstractNodeMain {
 		Llama3.options = Options.parseOptions(opts);
 		StringTensor s = new StringTensor(Llama3.options.modelPath().toString());
 		//try(Timer _ = Timer.log("load model")) {
-			DeviceManager.loadModel(s, Llama3.options.getMaxTokens());
+		//
+		// start a thread to load the model. During load the modelLoaded flag will
+		// instruct incoming message processing threads to ignore the messages until the model is loaded.
+		// in addition, the dbLatch latch will provide a barrier synch wait point for other threads.
+		//
+		SynchronizedThreadManager.getInstance().spin(new Runnable() {
+			@Override
+			public void run() {
+				DeviceManager.loadModel(s, Llama3.options.getMaxTokens());
+				modelLoaded = true;
+				dbLatch.countDown();
+			}
+		},"LLM");
 		//}
 		try {
 			dbClient = connectedNode.getRelatrixClient();
@@ -242,11 +264,19 @@ public class ModelRunner extends AbstractNodeMain {
 			ioe.printStackTrace();
 		}
 		//
-		// Start new thread for balance of model
+		// Start new thread to bring up the database and preload the model with system level instructions.
+		// we will call processMessage outside of normal message queuing because we dont want it possibly
+		// overwritten and we are presenting it at system level. All subsequent calls to processMessage
+		// should go through the normal queueing channel.
 		//
 		SynchronizedThreadManager.getInstance().spin(new Runnable() {
 			@Override
 			public void run() {
+				try {
+					dbLatch.await();
+				} catch (InterruptedException e) {
+					return;
+				}
 				relatrixLSH = new RelatrixLSH(dbClient, Llama3.options.getMaxTokens());
 				// Chat format seems solely based on individual model, so we extract a name in model loader from Metada general.name
 				// set up the preamble system directives
@@ -260,9 +290,7 @@ public class ModelRunner extends AbstractNodeMain {
 						log.info("***Queueing from system preamble:"+response.get());
 					ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
 					relatrixLSH.addInteraction(System.currentTimeMillis(), ChatFormat.Role.SYSTEM, promptTokens, responseMessage.encode());
-					try {
-						messageQueue.addLastWait(response.get());
-					} catch(InterruptedException ie) {}
+					outgoingMessageQueue.addLast(response.get());
 				}
 				// See if we preload DB with interactions
 				if(Llama3.options.preload()) {
@@ -275,7 +303,6 @@ public class ModelRunner extends AbstractNodeMain {
 						e.printStackTrace();
 					}
 				}
-				dbLatch.countDown();
 			}
 		},"DB");
 		//
@@ -295,11 +322,13 @@ public class ModelRunner extends AbstractNodeMain {
 		subsobjd.addMessageListener(new MessageListener<stereo_msgs.StereoImage>() {
 			@Override
 			public void onNewMessage(StereoImage message) {
-				try {
-					dbLatch.await();
-				} catch (InterruptedException e) { return; }
+				//try {
+				//	dbLatch.await();
+				//} catch (InterruptedException e) { return; }
 				ByteBuffer buf = message.getData();
 				String sbuf = new String(buf.array(), buf.position(), buf.remaining(), StandardCharsets.UTF_8);
+				if(DEBUG)
+					log.info("StereoImage message:"+sbuf);
 				long imageTime = System.currentTimeMillis();
 				if((imageTime-lastImageTime) >= MESSAGE_THRESHOLD) {
 					lastImageTime = imageTime;
@@ -311,9 +340,9 @@ public class ModelRunner extends AbstractNodeMain {
 		subsuser.addMessageListener(new MessageListener<std_msgs.String>() {
 			@Override
 			public void onNewMessage(std_msgs.String message) {
-				try {
-					dbLatch.await();
-				} catch (InterruptedException e) { return; }
+				//try {
+				//	dbLatch.await();
+				//} catch (InterruptedException e) { return; }
 				processRole(message.getData(), ChatFormat.Role.USER);
 			}
 		});
@@ -321,9 +350,9 @@ public class ModelRunner extends AbstractNodeMain {
 		subsystem.addMessageListener(new MessageListener<std_msgs.String>() {
 			@Override
 			public void onNewMessage(std_msgs.String message) {
-				try {
-					dbLatch.await();
-				} catch (InterruptedException e) { return; }
+				//try {
+				//	dbLatch.await();
+				//} catch (InterruptedException e) { return; }
 				processRole(message.getData(), ChatFormat.Role.SYSTEM);
 			}
 		});
@@ -334,9 +363,11 @@ public class ModelRunner extends AbstractNodeMain {
 		subsimu.addMessageListener(new MessageListener<sensor_msgs.Imu>() {
 			@Override
 			public void onNewMessage(sensor_msgs.Imu message) {
-				try {
-					dbLatch.await();
-				} catch (InterruptedException e) { return; }
+				//try {
+				//	dbLatch.await();
+				//} catch (InterruptedException e) { return; }
+				if(DEBUG)
+					log.info("IMU message:"+message.toString());
 				synchronized(euler) {
 					if(euler.euler == null) {
 						euler.euler = message;
@@ -361,9 +392,11 @@ public class ModelRunner extends AbstractNodeMain {
 		subsrange.addMessageListener(new MessageListener<std_msgs.String>() {
 			@Override
 			public void onNewMessage(std_msgs.String message) {
-				try {
-					dbLatch.await();
-				} catch (InterruptedException e) { return; }
+				//try {
+				//	dbLatch.await();
+				//} catch (InterruptedException e) { return; }
+				if(DEBUG)
+					log.info("RangeFinder message:"+message.getData());
 				synchronized(ranges) {
 					if(ranges.range == null) {
 						ranges.range = message; //Float.parseFloat(message.getData());
@@ -406,7 +439,54 @@ public class ModelRunner extends AbstractNodeMain {
 				}
 			}
 		});
-
+		//
+		// start the main processing loop to consume messages on the incoming deque
+		//
+		SynchronizedThreadManager.getInstance().spin(new Runnable() {
+			@Override
+			public void run() {
+				while(shouldRun) {
+					ChatFormat.Message chatMessage;
+					try {
+						chatMessage = incomingMessageQueue.takeFirst();
+					} catch (InterruptedException e) {
+						shouldRun = false;
+						break;
+					}
+					List<ChatFormat.Message> responses = null;
+					try {
+						responses = relatrixLSH.findNearest(chatMessage);
+					} catch (IllegalArgumentException | ClassNotFoundException | IllegalAccessException | IOException | InterruptedException | ExecutionException e) {
+						e.printStackTrace();
+						responses = new ArrayList<ChatFormat.Message>();
+					}
+					if(DEBUG) {
+						StringBuilder sb = new StringBuilder("Responses:\n");
+						for(int i = 0; i < responses.size(); i++) {
+							sb.append(i);
+							sb.append(".) ");
+							sb.append(responses.get(i));
+							sb.append("\n");
+						}
+						log.info(sb.toString());
+					}
+					responses.add(chatMessage);
+					Optional<String> response = processMessage(ChatFormat.encodeDialogPrompt(true, responses));
+					if(response.isPresent() && response.get().trim().length() > 0) {
+						if(DEBUG)
+							log.info("***Queueing from role:"+chatMessage.role()+" message:"+response.get());
+						ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
+						relatrixLSH.addInteraction(System.currentTimeMillis(), chatMessage.role(), chatMessage.encode(), responseMessage.encode());
+						outgoingMessageQueue.addLast(response.get());
+					}
+					//try(Timer _ = Timer.log("reset context")) {
+					if(onceThrough)
+						DeviceManager.resetContext();
+					onceThrough = true;
+					//}
+				}
+			}
+		},"LLM");
 		/**
 		 * Main publishing loop. Essentially we are publishing the data in whatever state its in.
 		 * This CancellableLoop will be canceled automatically when the node shuts down
@@ -426,8 +506,10 @@ public class ModelRunner extends AbstractNodeMain {
 				//imghead.setStamp(tst);
 				//imghead.setFrameId(tst.toString());
 				// block until we have a message, take from head of queue
-				String responseData = messageQueue.takeFirstNotify();
+				String responseData = outgoingMessageQueue.takeFirst();
 				std_msgs.String pubmess = pubmodel.newMessage();
+				if(DEBUG)
+					log.info("PUBLISHING "+sequenceNumber+".) "+responseData);
 				pubmess.setData(responseData);
 				//pubmess.setHeader(imghead);
 				//log.info("Publishing "+responseData);
@@ -442,7 +524,12 @@ public class ModelRunner extends AbstractNodeMain {
 	 * @param promptTokens List of prompt tokens
 	 * @return The dialog as Optional String
 	 */
-	public static Optional<String> processMessage(List<Integer> promptTokens ) {
+	private static Optional<String> processMessage(List<Integer> promptTokens ) {
+		//try {
+		//	dbLatch.await();
+		//} catch (InterruptedException e) {
+		//	return Optional.empty();
+		//}
  		IntTensor retTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
         List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
@@ -450,6 +537,10 @@ public class ModelRunner extends AbstractNodeMain {
         ChatFormat.Message promptMessage = new ChatFormat.Message(ChatFormat.Role.USER, userText);
         dialog.add(promptMessage);
         StringTensor p = ChatFormat.extractDialogPrompt(true, dialog);
+        if(p.size() >= Llama3.options.getMaxTokens()) {
+        	log.warn(p.size()+" message processing may exceed dialog maximum! skipping..");
+        	return Optional.empty();
+        }
         if(DEBUG)
         	log.info("ModelRunner.processMessage sending dialog to inference:"+p);
 		//try(Timer _ = Timer.log("run model interactive")) {
@@ -473,6 +564,7 @@ public class ModelRunner extends AbstractNodeMain {
         ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, cleanString);
 		return Optional.ofNullable(responseMessage.applyChatTemplate());
 	}
+	
 	/**
 	 * Process the given interaction using the role provided, beginning with model.CreateNewState
 	 * and ending with a check for response.isPresent and if so, relatrixLSH.addInteraction, then messageQueue.addLastWait(response).
@@ -480,46 +572,17 @@ public class ModelRunner extends AbstractNodeMain {
 	 * @param role the role context. role is ChatFromat.Role.USER, ChatFromat.Role.SYSTEM, ChatFromat.Role.ASSISTANT
 	 */
 	private void processRole(String message, ChatFormat.Role role) {
+		if(!modelLoaded)
+			return;
 		if(message.trim().length() == 0) {
 			if(DEBUG)
 				log.info(role+" message empty...");
 			return;
 		}
 		ChatFormat.Message chatMessage = new ChatFormat.Message(role, message);
-		List<ChatFormat.Message> responses = null;
-		try {
-			responses = relatrixLSH.findNearest(chatMessage);
-		} catch (IllegalArgumentException | ClassNotFoundException | IllegalAccessException | IOException | InterruptedException | ExecutionException e) {
-			e.printStackTrace();
-			responses = new ArrayList<ChatFormat.Message>();
-		}
-		if(DEBUG) {
-			StringBuilder sb = new StringBuilder("Responses:\n");
-			for(int i = 0; i < responses.size(); i++) {
-				sb.append(i);
-				sb.append(".) ");
-				sb.append(responses.get(i));
-				sb.append("\n");
-			}
-			log.info(sb.toString());
-		}
-		responses.add(chatMessage);
-		Optional<String> response = processMessage(ChatFormat.encodeDialogPrompt(true, responses));
-		if(response.isPresent() && response.get().trim().length() > 0) {
-			if(DEBUG)
-				log.info("***Queueing from role USER:"+response.get());
-			ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
-			relatrixLSH.addInteraction(System.currentTimeMillis(), role, chatMessage.encode(), responseMessage.encode());
-			try {
-				messageQueue.addLastWait(response.get());
-			} catch(InterruptedException ie) {}
-		}
-		//try(Timer _ = Timer.log("reset context")) {
-			if(onceThrough)
-				DeviceManager.resetContext();
-			onceThrough = true;
-		//}
+		incomingMessageQueue.addLast(chatMessage);
 	}
+	
 	/**
 	 * Intercept the model output and generate a movement command to be published to the {@link com.neocoretechs.robocore.propulsion.MotionController}
 	 * @param modelOutput

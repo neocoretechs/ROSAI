@@ -14,7 +14,7 @@ import org.apache.commons.logging.LogFactory;
  */
 public final class DeviceManager {
 	private static final Log log = LogFactory.getLog(DeviceManager.class);
-	private static boolean DEBUG = false;
+	private static boolean DEBUG = true;
 
 	public static void loadModel(StringTensor model, int contextSize) {
 		MemorySegment hostSeg = model.getSegment();
@@ -80,14 +80,25 @@ public final class DeviceManager {
 	
 	public static String decode(List<Integer> it) {
 		//System.out.println(Arrays.toString(it.toArray()));
-		IntTensor itt = new IntTensor(it);
+		int i;
+		for(i = it.size()-1; i >= 0; i--) {
+			if(ChatFormat.stopTokens.contains(it.get(i)))
+				break;
+		}
+		IntTensor itt = new IntTensor(it.subList(0, i));
+		if(DEBUG)
+			log.info("decode input len="+i);
 		StringTensor retStringTensor = new StringTensor(new byte[Llama3.options.getMaxTokens()]);
-		int strLen = tokenToString(itt, it.size(), retStringTensor);
+		int strLen = tokenToString(itt, i, retStringTensor);
 		String retString = retStringTensor.toString();
-		strLen = retString.indexOf("<|eot_id|>");
+		if(DEBUG)
+			log.info("decode strLen="+retString.length());
+		strLen = retString.lastIndexOf("<|eot_id|>");
 		if(strLen != -1)
 			retString = retString.substring(0,strLen+10);
-		return retString.trim();
+		if(DEBUG)
+			log.info("decode strLen subsring="+retString.length());
+		return retString;
 	}
 	
 	public static int applyChatTemplate(MessageTensor chatSegt, StringTensor outSegt, int msgNum, int bufLen, boolean addAssistantPrompt) {
