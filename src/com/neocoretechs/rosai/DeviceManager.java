@@ -77,7 +77,16 @@ public final class DeviceManager {
 		stringToToken(str, it);
 		return it.toList();
 	}
-	
+	/**
+	 * Decode a String from a list of input tokens using tokenToString call to model.
+	 * This method is the only one that might constrain models to working entirely properly with Llama-based
+	 * models. Based on stopTokens from {@link ChatFormat} we wont be able to properly strip out formatting
+	 * to return an entirely decoded String from the list of input tokens. Side effects are not fully known but
+	 * retrieval from LSH indexing might be affected. A more extensive list of stop tokens per model and eot_id
+	 * per model, perhaps via enhancement in ChatFormat might be required to properly utilize other models fully.
+	 * @param it The List of integer input tokens
+	 * @return the resultant STring.
+	 */
 	public static String decode(List<Integer> it) {
 		//System.out.println(Arrays.toString(it.toArray()));
 		int i;
