@@ -23,7 +23,7 @@ import org.apache.commons.logging.LogFactory;
  */
 public class MessageTensor implements Externalizable, Comparable {
 	private static final Log log = LogFactory.getLog(MessageTensor.class);
-	public static boolean DEBUG = true;
+	public static boolean DEBUG = false;
 	MemorySegment memorySegment;
 	private int totalMessageSize;
 	private int totalMessages;

@@ -76,7 +76,7 @@ import com.neocoretechs.rocksack.Alias;
 public class ModelRunner extends AbstractNodeMain {
 	private static final Log log = LogFactory.getLog(ModelRunner.class);
 	// Batch-size used in prompt evaluation.
-	public static boolean DEBUG = true;
+	public static boolean DEBUG = false;
 	public static boolean DISPLAY_METADATA = false;
 	AsynchRelatrixClientTransaction dbClient = null;
 	//static RelatrixTransaction dbClient = null;
@@ -94,30 +94,26 @@ public class ModelRunner extends AbstractNodeMain {
 	public static final String ASSIST_PROMPT = "/assist_prompt";
 	public static final String LLM = "/model";
 
-	CircularBlockingDeque<String> outgoingMessageQueue = new CircularBlockingDeque<>(1024);
-	CircularBlockingDeque<ChatFormat.Message> incomingMessageQueue = new CircularBlockingDeque<>(1024);
+	CircularBlockingDeque<String> outgoingMessageQueue = new CircularBlockingDeque<>(64);
+	CircularBlockingDeque<ChatFormat.Message> incomingMessageQueue = new CircularBlockingDeque<>(128);
 
 	protected Object mutex = new Object();
 	protected static CountDownLatch dbLatch = new CountDownLatch(1); // barrier synch database init
 	private static boolean modelLoaded = false; // model loaded flag
 	static final String REMAP_DEBUG = "__debug"; // command line remapping variable set to boolean true for DEBUG=true
 
-	static long MESSAGE_THRESHOLD = 5000; // ms minimum between subscribed message reception
+	static long MESSAGE_THRESHOLD = 100; // ms minimum between subscribed message reception object detection and rangefinder
 	static long lastImageTime = System.currentTimeMillis();
 
 	static RelatrixLSH relatrixLSH = null;
-
-	static class EulerTime {
-		sensor_msgs.Imu euler;
-		long eulerTime = 0L;
-	}
-	EulerTime euler = new EulerTime();
+	
+	static Publisher<trajectory_msgs.ComeToHeadingStamped> pubsmodelmove = null; 
 
 	static class RangeTime {
 		std_msgs.String range;
 		long rangeTime = 0L;
 		public String toJSON() {
-			return String.format("{range=%s}", range.getData());
+			return range.getData();
 		}
 	}
 	RangeTime ranges = new RangeTime();
@@ -306,16 +302,17 @@ public class ModelRunner extends AbstractNodeMain {
 			}
 		},"DB");
 		//
-		// Set up publisher
+		// Set up publishers
 		//final Log log = connectedNode.getLog();
 		final Publisher<std_msgs.String> pubmodel = connectedNode.newPublisher(LLM, std_msgs.String._TYPE);
+		pubsmodelmove = connectedNode.newPublisher("/model_commands/move", ComeToHeadingStamped._TYPE);
 		// Subscribers
 		final Subscriber<std_msgs.String> subsystem = connectedNode.newSubscriber(SYSTEM_PROMPT, std_msgs.String._TYPE);
 		final Subscriber<std_msgs.String> subsuser = connectedNode.newSubscriber(USER_PROMPT, std_msgs.String._TYPE);
 		final Subscriber<stereo_msgs.StereoImage> subsobjd = connectedNode.newSubscriber("/stereo_msgs/ObjectDetect", stereo_msgs.StereoImage._TYPE);
-		final Subscriber<sensor_msgs.Imu> subsimu = connectedNode.newSubscriber("/sensor_msgs/Imu", sensor_msgs.Imu._TYPE);
 		final Subscriber<std_msgs.String> subsrange = connectedNode.newSubscriber("/sensor_msgs/range",std_msgs.String._TYPE);
 		final Subscriber<diagnostic_msgs.DiagnosticStatus> subsbat = connectedNode.newSubscriber("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
+		
 		//
 		// set up subscriber callback for object detection messages
 		//
@@ -356,36 +353,7 @@ public class ModelRunner extends AbstractNodeMain {
 				processRole(message.getData(), ChatFormat.Role.SYSTEM);
 			}
 		});
-		//
-		// update all TimedImage in the queue that match the current timestamp to 1 ms with the current
-		// IMU reading
-		//
-		subsimu.addMessageListener(new MessageListener<sensor_msgs.Imu>() {
-			@Override
-			public void onNewMessage(sensor_msgs.Imu message) {
-				//try {
-				//	dbLatch.await();
-				//} catch (InterruptedException e) { return; }
-				if(DEBUG)
-					log.info("IMU message:"+message.toString());
-				synchronized(euler) {
-					if(euler.euler == null) {
-						euler.euler = message;
-						euler.eulerTime = System.currentTimeMillis();
-						processRole("IMU update:\n"+euler.euler.toJSON(), ChatFormat.Role.USER);
-					} else
-						if(euler.euler.getCompassHeadingDegrees() != message.getCompassHeadingDegrees() ||
-						euler.euler.getRoll() != message.getRoll() ||
-						euler.euler.getPitch() != message.getPitch()) {
-							euler.euler = message;
-							if((System.currentTimeMillis() - euler.eulerTime) >= MESSAGE_THRESHOLD) {
-								euler.eulerTime = System.currentTimeMillis();
-								processRole("IMU update:\n"+euler.euler.toJSON(), ChatFormat.Role.USER);
-							}
-						}
-				}
-			}
-		});
+	
 		//
 		// Ultrasonic distance sensor also timestamped and correlated
 		//
@@ -524,7 +492,7 @@ public class ModelRunner extends AbstractNodeMain {
 	 * @param promptTokens List of prompt tokens
 	 * @return The dialog as Optional String
 	 */
-	private static Optional<String> processMessage(List<Integer> promptTokens ) {
+	private static Optional<String> processMessage(List<Integer> promptTokens) {
 		//try {
 		//	dbLatch.await();
 		//} catch (InterruptedException e) {
@@ -553,14 +521,21 @@ public class ModelRunner extends AbstractNodeMain {
 			return Optional.empty();
 		}
 		List<Integer> retTokenList = retTokens.toList();
-		String cleanString = DeviceManager.decode(retTokenList);
-		if(DEBUG)
-			log.info("Raw returned prompt len="+cleanString.length());
-		cleanString = cleanString.trim();
+		String cleanString = DeviceManager.decode(retTokenList).trim();
 		if(DEBUG)
 			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
 		if(cleanString.length() == 0)
 			return Optional.empty();
+		if(cleanString.startsWith("http://") || cleanString.startsWith("file://")) {
+			Element e = parseLinks(cleanString,"//a");
+			cleanString = e.text();
+		} else {
+			if(cleanString.startsWith("```json")) {
+				cleanString = cleanString.substring(7,cleanString.length()-3);
+				intercept(cleanString);
+				return Optional.empty();
+			}
+		}
         ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, cleanString);
 		return Optional.ofNullable(responseMessage.applyChatTemplate());
 	}
@@ -584,31 +559,28 @@ public class ModelRunner extends AbstractNodeMain {
 	}
 	
 	/**
-	 * Intercept the model output and generate a movement command to be published to the {@link com.neocoretechs.robocore.propulsion.MotionController}
+	 * Intercept the model output and generate a command to be published to the proper topic
+	 * @see com.neocoretechs.robocore.propulsion.MotionController
 	 * @param modelOutput
 	 * @param currentHeading
-	 * @return
 	 */
-	public Optional<ComeToHeadingStamped> intercept(String modelOutput, float currentHeading) {
+	public static void intercept(String modelOutput) {
 		try {
 			JSONObject obj = new JSONObject(modelOutput);
 			String actionStr = obj.getString("action");
-			ComeToHeadingStamped.action act = ComeToHeadingStamped.action.valueOf(actionStr);
-			int distance = obj.optInt("distance", 0);
-			float heading = obj.optFloat("heading", currentHeading);
-			long timestamp = obj.optLong("timestamp", System.currentTimeMillis());
-			ComeToHeadingStamped cths = new ComeToHeadingStamped();
-			cths.fromJSON(actionStr);
-			std_msgs.Int32 mdist = new std_msgs.Int32();
-			mdist.setData(distance);
-			std_msgs.Float32 mhead = new std_msgs.Float32();
-			mhead.setData(heading);
-			std_msgs.UInt64 mtime = new std_msgs.UInt64();
-			mtime.setData(timestamp);
-			return Optional.of(new ComeToHeadingStamped(act,mdist,mhead,mtime));
+			if(actionStr == null)
+				return;
+			if(actionStr.startsWith("move_") || actionStr.startsWith("pivot_")) {
+				if(pubsmodelmove == null) {
+					log.info("Motion control publisher not yet initialized...");
+					return;
+				}
+				ComeToHeadingStamped cths = new ComeToHeadingStamped();
+				cths.fromJSON(modelOutput);
+				pubsmodelmove.publish(cths);
+			}
 		} catch (Exception e) {
-			log.error("Failed to parse model output: " + e.getMessage());
-			return Optional.empty();
+			log.info("Failed to parse model output: " + e.getMessage());
 		}
 	}
 

@@ -11,11 +11,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import com.neocoretechs.rocksack.session.DatabaseManager;
 import com.neocoretechs.rosai.Llama3;
 
 public final class NativeLoader {
-	public static boolean DEBUG = true;
+	public static boolean DEBUG = false;
 	private static final Log log = LogFactory.getLog(NativeLoader.class);
     private static volatile boolean loaded = false;
     private NativeLoader() {}
