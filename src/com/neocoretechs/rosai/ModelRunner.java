@@ -17,6 +17,7 @@ import stereo_msgs.StereoImage;
 import trajectory_msgs.ComeToHeadingStamped;
 
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -107,7 +108,9 @@ public class ModelRunner extends AbstractNodeMain {
 
 	static RelatrixLSH relatrixLSH = null;
 	
-	static Publisher<trajectory_msgs.ComeToHeadingStamped> pubsmodelmove = null; 
+	static Publisher<trajectory_msgs.ComeToHeadingStamped> pubsmodelmove = null;
+	
+	ChatFormat chatFormat;
 
 	static class RangeTime {
 		std_msgs.String range;
@@ -125,7 +128,7 @@ public class ModelRunner extends AbstractNodeMain {
 	 * @param xPath xpath directive
 	 * @return The Element that matches directive
 	 */
-	private static Element parseLinks(String urlc, String xPath) {
+	private static Element parseUrl(String urlc, String xPath) {
 		//try {	
 		Document doc = null;
 		try {
@@ -148,7 +151,7 @@ public class ModelRunner extends AbstractNodeMain {
 		if(result == null)
 			return null;
 		if(result.is("a"))
-			return parseLinks(result.attr("href"),"//a");
+			return parseUrl(result.attr("href"),"//a");
 		return result;
 		//System.out.printf("toString:%s text:%s wholeText:%s%n", result.toString(),result.text(),result.wholeText());
 		//System.out.printf("result is a:%b result is a[href]:%b%n",result.is("a"),result.is("a[href]"));
@@ -157,7 +160,39 @@ public class ModelRunner extends AbstractNodeMain {
 		//}
 		//return null;
 	}
-
+	private static Element parseFile(String file, String xPath) {
+		//try {	
+		Document doc = null;
+		try {
+			if(file.startsWith("file://"))
+				file = file.substring(7);
+			File f = new File(file);
+			doc = Jsoup.parse(f);
+		} catch(IOException ioe) {
+			ioe.printStackTrace();
+			return null;
+		}
+		Element result = null;
+		Elements results = null;
+		//for(int i = 1; i < urlc.length; i++) {
+		//	results = doc.select(urlc[i]);
+		//}
+		results = doc.selectXpath(xPath);
+		if(results == null)
+			return null;
+		result = results.first();
+		if(result == null)
+			return null;
+		if(result.is("a"))
+			return parseFile(result.attr("href"),"//a");
+		return result;
+		//System.out.printf("toString:%s text:%s wholeText:%s%n", result.toString(),result.text(),result.wholeText());
+		//System.out.printf("result is a:%b result is a[href]:%b%n",result.is("a"),result.is("a[href]"));
+		//} catch(MalformedURLException e) {
+		//	e.printStackTrace();
+		//}
+		//return null;
+	}
 	/**
 	 * command /recalltime 
 	 * arg day time to end day time
@@ -239,6 +274,7 @@ public class ModelRunner extends AbstractNodeMain {
 			public void run() {
 				DeviceManager.loadModel(s, Llama3.options.getMaxTokens());
 				modelLoaded = true;
+				chatFormat = new ChatFormat();
 				dbLatch.countDown();
 			}
 		},"LLM");
@@ -278,13 +314,13 @@ public class ModelRunner extends AbstractNodeMain {
 				// set up the preamble system directives
 				List<Integer> promptTokens = new ArrayList<>();
 				//promptTokens.add(chatFormat.getBeginOfText());
-				List<ChatFormat.Message> prompts = SystemPrompts.getSystemMessages();
-				promptTokens.addAll(ChatFormat.encodeDialogPrompt(false, prompts));
-				Optional<String> response = processMessage(promptTokens);
+				List<ChatFormat.Message> prompts = SystemPrompts.getSystemMessages(chatFormat);
+				promptTokens.addAll(chatFormat.encodeDialogPrompt(false, prompts));
+				Optional<String> response = processMessage(chatFormat, promptTokens);
 				if(response.isPresent() && response.get().length() > 0) {
 					if(DEBUG)
 						log.info("***Queueing from system preamble:"+response.get());
-					ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
+					ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
 					relatrixLSH.addInteraction(System.currentTimeMillis(), ChatFormat.Role.SYSTEM, promptTokens, responseMessage.encode());
 					outgoingMessageQueue.addLast(response.get());
 				}
@@ -294,7 +330,7 @@ public class ModelRunner extends AbstractNodeMain {
 						String fileName = Llama3.options.modelPath().getFileName().toString();
 						int dotIndex = fileName.lastIndexOf('.');     
 						fileName = (dotIndex == -1) ? fileName : fileName.substring(0, dotIndex);
-						SystemPrompts.frontloadDb(relatrixLSH, fileName+".txt");
+						SystemPrompts.frontloadDb(relatrixLSH, chatFormat, fileName+".txt");
 					} catch (IOException e) {
 						e.printStackTrace();
 					}
@@ -423,7 +459,7 @@ public class ModelRunner extends AbstractNodeMain {
 					}
 					List<ChatFormat.Message> responses = null;
 					try {
-						responses = relatrixLSH.findNearest(chatMessage);
+						responses = relatrixLSH.findNearest(chatFormat, chatMessage);
 					} catch (IllegalArgumentException | ClassNotFoundException | IllegalAccessException | IOException | InterruptedException | ExecutionException e) {
 						e.printStackTrace();
 						responses = new ArrayList<ChatFormat.Message>();
@@ -439,11 +475,11 @@ public class ModelRunner extends AbstractNodeMain {
 						log.info(sb.toString());
 					}
 					responses.add(chatMessage);
-					Optional<String> response = processMessage(ChatFormat.encodeDialogPrompt(true, responses));
+					Optional<String> response = processMessage(chatFormat, chatFormat.encodeDialogPrompt(true, responses));
 					if(response.isPresent() && response.get().trim().length() > 0) {
 						if(DEBUG)
 							log.info("***Queueing from role:"+chatMessage.role()+" message:"+response.get());
-						ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, response.get());
+						ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
 						relatrixLSH.addInteraction(System.currentTimeMillis(), chatMessage.role(), chatMessage.encode(), responseMessage.encode());
 						outgoingMessageQueue.addLast(response.get());
 					}
@@ -492,19 +528,19 @@ public class ModelRunner extends AbstractNodeMain {
 	 * @param promptTokens List of prompt tokens
 	 * @return The dialog as Optional String
 	 */
-	private static Optional<String> processMessage(List<Integer> promptTokens) {
-		//try {
-		//	dbLatch.await();
-		//} catch (InterruptedException e) {
-		//	return Optional.empty();
-		//}
+	private static Optional<String> processMessage(ChatFormat chatFormat, List<Integer> promptTokens) {
+		try {
+			dbLatch.await();
+		} catch (InterruptedException e) {
+			return Optional.empty();
+		}
  		IntTensor retTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
         List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
-        String userText = DeviceManager.decode(promptTokens);
-        ChatFormat.Message promptMessage = new ChatFormat.Message(ChatFormat.Role.USER, userText);
+        String userText = DeviceManager.decode(chatFormat, promptTokens);
+        ChatFormat.Message promptMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, userText);
         dialog.add(promptMessage);
-        StringTensor p = ChatFormat.extractDialogPrompt(true, dialog);
+        StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
         if(p.size() >= Llama3.options.getMaxTokens()) {
         	log.warn(p.size()+" message processing may exceed dialog maximum! skipping..");
         	return Optional.empty();
@@ -521,22 +557,37 @@ public class ModelRunner extends AbstractNodeMain {
 			return Optional.empty();
 		}
 		List<Integer> retTokenList = retTokens.toList();
-		String cleanString = DeviceManager.decode(retTokenList).trim();
+		String cleanString = DeviceManager.decode(chatFormat, retTokenList).trim();
 		if(DEBUG)
 			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
 		if(cleanString.length() == 0)
 			return Optional.empty();
-		if(cleanString.startsWith("http://") || cleanString.startsWith("file://")) {
-			Element e = parseLinks(cleanString,"//a");
-			cleanString = e.text();
-		} else {
-			if(cleanString.startsWith("```json")) {
-				cleanString = cleanString.substring(7,cleanString.length()-3);
-				intercept(cleanString);
+		if(cleanString.startsWith("http://")) {
+			try {
+				Element e = parseUrl(cleanString,"//a");
+				cleanString = e.text();
+			} catch(Exception e) {
+				log.info("processing URL "+cleanString+" failed due to :"+e.getMessage());
 				return Optional.empty();
 			}
+		} else {
+			if(cleanString.startsWith("file://")) {
+				try {
+					Element e = parseFile(cleanString,"//a");
+					cleanString = e.text();
+				} catch(Exception e) {
+					log.info("processing file "+cleanString+" failed due to :"+e.getMessage());
+					return Optional.empty();
+				}
+			} else {
+				if(cleanString.startsWith("```json")) {
+					cleanString = cleanString.substring(7,cleanString.length()-3);
+					intercept(cleanString);
+					return Optional.empty();
+				}
+			}
 		}
-        ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, cleanString);
+        ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, cleanString);
 		return Optional.ofNullable(responseMessage.applyChatTemplate());
 	}
 	
@@ -554,7 +605,7 @@ public class ModelRunner extends AbstractNodeMain {
 				log.info(role+" message empty...");
 			return;
 		}
-		ChatFormat.Message chatMessage = new ChatFormat.Message(role, message);
+		ChatFormat.Message chatMessage = new ChatFormat.Message(chatFormat, role, message);
 		incomingMessageQueue.addLast(chatMessage);
 	}
 	

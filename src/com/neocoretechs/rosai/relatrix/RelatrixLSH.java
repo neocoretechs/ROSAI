@@ -285,6 +285,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * Find the nearest candidates using cosine similarity. If none are found get the lset timestsamp
 	 * retrieve that vector, then get the other vectors with the LSH index and obtain
 	 * the most relevant.
+	 * @param chatFormat chatFormat instance
 	 * @param promptFrame list of messages to populate starting with initial request
 	 * @return List of retrieved messages
 	 * @throws ExecutionException asychronous database client exception
@@ -294,7 +295,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws ClassNotFoundException asychronous database client exception
 	 * @throws IllegalArgumentException asychronous database client exception
 	 */
-	public List<ChatFormat.Message> findNearest(ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
+	public List<ChatFormat.Message> findNearest(ChatFormat chatFormat, ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> nearest = null;
 		List<Integer> results = (List<Integer>)promptFrame.encode();
 		if(DEBUG)
@@ -354,7 +355,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			cosDist = Math.acos(cosDist); // radians
 			thetasim[i] = cosDist;
 			if(DEBUG)
-				log.info("findNearest retrieved result set dialog index:"+i+" of "+nearest.size()+" theta="+cosDist+" .) "+result.get(0)+" "+DeviceManager.decode(restensor));
+				log.info("findNearest retrieved result set dialog index:"+i+" of "+nearest.size()+" theta="+cosDist+" .) "+result.get(0));//+" "+DeviceManager.decode(restensor));
 			tm.put(cosDist, i);
 		}
 		// Now we need another TreeMap with the entries in TimestampRole descending order. As we
@@ -392,25 +393,25 @@ public final class RelatrixLSH implements Serializable, Comparable {
 					if(trn != null && (trn.getKey().getTimestamp() == trr.getTimestamp())) { 		
 						if(trn.getKey().getRole() == ChatFormat.Role.USER) {
 							Result result2 = nearest.get(trn.getValue()); // index to nearest list
-							addRetrievedMessage(result2, results, returns);
+							addRetrievedMessage(result2, results, chatFormat, returns);
 						} else {
 							if(trn.getKey().getRole() == ChatFormat.Role.SYSTEM) {
 								trn = tr.higherEntry(tr.higherKey(trr));
 								if(trn != null && trn.getKey().getRole() == ChatFormat.Role.USER) {
 									Result result2 = nearest.get(trn.getValue()); // index to nearest list
-									addRetrievedMessage(result2, results, returns);
+									addRetrievedMessage(result2, results, chatFormat, returns);
 								} else {
 									TimestampRole tr2 = new TimestampRole(trr.getTimestamp(), ChatFormat.Role.USER);
-									getTimestampRole(results, returns, tr2);
+									getTimestampRole(results, chatFormat, returns, tr2);
 								}
 							} else {
 								TimestampRole tr2 = new TimestampRole(trr.getTimestamp(), ChatFormat.Role.USER);
-								getTimestampRole(results, returns, tr2);
+								getTimestampRole(results, chatFormat, returns, tr2);
 							}
 						}
 					} else {
 						TimestampRole tr2 = new TimestampRole(trr.getTimestamp(), ChatFormat.Role.USER);
-						getTimestampRole(results, returns, tr2);
+						getTimestampRole(results, chatFormat, returns, tr2);
 					}
 				} else {
 					wasUser = false; // fall through
@@ -422,33 +423,33 @@ public final class RelatrixLSH implements Serializable, Comparable {
 						if(trn != null && (trn.getKey().getTimestamp() == trr.getTimestamp())) {
 							if(trn.getKey().getRole() == ChatFormat.Role.ASSISTANT) {
 								Result result2 = nearest.get(trn.getValue()); // index to nearest list
-								addRetrievedMessage(result2, results, returns);
+								addRetrievedMessage(result2, results, chatFormat, returns);
 							} else {
 								if(trn.getKey().getRole() == ChatFormat.Role.SYSTEM) {
 									trn = tr.lowerEntry(tr.lowerKey(trr)); 
 									// lower key of user is assistant same timestamp?
 									if(trn != null && trn.getKey().getRole() == ChatFormat.Role.ASSISTANT) {
 										Result result2 = nearest.get(trn.getValue()); // index to nearest list
-										addRetrievedMessage(result2, results, returns);
+										addRetrievedMessage(result2, results, chatFormat, returns);
 									} else {
 										TimestampRole tr2 = new TimestampRole(trr.getTimestamp(), ChatFormat.Role.ASSISTANT);
-										getTimestampRole(results, returns, tr2);
+										getTimestampRole(results, chatFormat, returns, tr2);
 									}
 								} else {
 									TimestampRole tr2 = new TimestampRole(trr.getTimestamp(), ChatFormat.Role.ASSISTANT);
-									getTimestampRole(results, returns, tr2);
+									getTimestampRole(results, chatFormat, returns, tr2);
 								}
 							}					
 						} else {
 							TimestampRole tr2 = new TimestampRole(trr.getTimestamp(), ChatFormat.Role.ASSISTANT);
-							getTimestampRole(results, returns, tr2);
+							getTimestampRole(results, chatFormat, returns, tr2);
 						}
 					} else {
 						wasUser = true;
 					}
 				}
 			}
-			addRetrievedMessage(result, results, returns);
+			addRetrievedMessage(result, results, chatFormat, returns);
 			++cnt;
 		}
 		if(DEBUG)
@@ -463,7 +464,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				Result result = nearest.get(i);
 				TimestampRole trr =  (TimestampRole) result.get(0);
 				trr.setRole(ChatFormat.Role.SYSTEM);
-				addRetrievedMessage(result, trr, results, returns);
+				addRetrievedMessage(result, trr, results, chatFormat, returns);
 			}
 		}
 		// put most recent user query last
@@ -475,13 +476,14 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * as ChatFormat.Message
 	 * @param result Result result set from retrieval
 	 * @param results tokenized results
+	 * @param chatFormat chatFormat instance
 	 * @param returns List of ChatFormat.Messge returns
 	 */
-	private void addRetrievedMessage(Result result, List<Integer> results, List<ChatFormat.Message> returns) {
+	private void addRetrievedMessage(Result result, List<Integer> results, ChatFormat chatFormat, List<ChatFormat.Message> returns) {
 		NoIndex noIndex = (NoIndex) result.get(1);
 		List<Integer> restensor = (List<Integer>)noIndex.getInstance();
 		results.addAll(restensor); // to keep track of max context size
-		String resString = DeviceManager.decode(restensor);
+		String resString = DeviceManager.decode(chatFormat, restensor);
 		if(DEBUG)
 			log.info("addRetrievedMessage:"+(TimestampRole)result.get(0)+" for NoIndex tokens="+results.size()+" decode="+resString.length());
 		// calculate running total
@@ -492,7 +494,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			log.info("addRetrievedMessage: addition of retrieved result of length "+resString+" would exceed context length by "+(totalLen+resString.length()-maxTokens));
 			return;
 		}
-		returns.add(new ChatFormat.Message(((TimestampRole)result.get(0)).getRole(), resString));
+		returns.add(new ChatFormat.Message(chatFormat, ((TimestampRole)result.get(0)).getRole(), resString));
 	}
 	/**
 	 * Permutation for existing TimestampRole, Result 0 - NoIndex vector
@@ -500,13 +502,14 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @param result result set from retrieval
 	 * @param trr TimestampRole retrieved TimestampRole
 	 * @param results tokenized results
+	 * @param chatFormat chatFormat instance
 	 * @param returns List of ChatFormat.Message returns
 	 */
-	private void addRetrievedMessage(Result result, TimestampRole trr, List<Integer> results, List<ChatFormat.Message> returns) {
+	private void addRetrievedMessage(Result result, TimestampRole trr, List<Integer> results, ChatFormat chatFormat, List<ChatFormat.Message> returns) {
 		NoIndex noIndex = (NoIndex) result.get(0);
 		List<Integer> restensor = (List<Integer>)noIndex.getInstance();
 		results.addAll(restensor); // to keep track of max context size
-		String resString = DeviceManager.decode(restensor);
+		String resString = DeviceManager.decode(chatFormat, restensor);
 		if(DEBUG)
 			log.info("addRetrievedMessage: existing TimestampRole:"+trr+" decode="+resString.length());
 		// calculate running total
@@ -517,17 +520,18 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			log.info("addRetrievedMessage: addition of retrieved result of length "+resString+" would exceed context length by "+(totalLen+resString.length()-maxTokens));
 			return;
 		}
-		returns.add(new ChatFormat.Message(trr.getRole(), resString));
+		returns.add(new ChatFormat.Message(chatFormat, trr.getRole(), resString));
 	}
 	/**
 	 * Get the NoIndex vector of List<Integer> for existing TimestampRole
 	 * @param results List of tokenized results
+	 * @param chatFormat chatFormat instance
 	 * @param returns running list of ChatFormat.message retrievals
 	 * @param trr target TimestampRole
 	 * @throws InterruptedException asynchronous db client exception
 	 * @throws ExecutionException asynchronous client/database exception
 	 */
-	private void getTimestampRole(List<Integer> results, List<ChatFormat.Message> returns, TimestampRole trr) throws InterruptedException, ExecutionException {
+	private void getTimestampRole(List<Integer> results, ChatFormat chatFormat, List<ChatFormat.Message> returns, TimestampRole trr) throws InterruptedException, ExecutionException {
 		if(DEBUG)
 			log.info("getTimestampRole for "+trr);
 		//CompletableFuture<Stream> cit = dbClient.findStream(xid, '*', trr, '?');
@@ -539,7 +543,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			if(DEBUG)
 				log.info("getTimeStampRole result");
 			//addRetrievedMessage((Result)e, trr, results, returns, tokenizer);
-			addRetrievedMessage((Result)it.next(), trr, results, returns);
+			addRetrievedMessage((Result)it.next(), trr, results, chatFormat, returns);
 			//});
 		}
 	}

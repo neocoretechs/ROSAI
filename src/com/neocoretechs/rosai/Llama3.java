@@ -58,7 +58,7 @@ public class Llama3 {
 		//try(Timer _ = Timer.log("load model")) {
 			DeviceManager.loadModel(s, options.getMaxTokens());
 		//}
-
+			ChatFormat chatFromat = new ChatFormat();
         if (options.interactive()) {
             ChatFormat chatFormat = new ChatFormat();
             List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
@@ -72,7 +72,7 @@ public class Llama3 {
                     case "/quit":
                     case "/exit": break loop;
                 }
-                ChatFormat.Message responseMessage = new ChatFormat.Message(ChatFormat.Role.USER, userText);
+                ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, userText);
                 dialog.add(responseMessage);
                 //List<Integer> dialogTokens = chatFormat.encodeDialogPrompt(true, dialog);
                 //IntTensor it = new IntTensor(dialogTokens);
@@ -90,10 +90,10 @@ public class Llama3 {
         			log.error("Context length exceeded, exiting");
         			break;
         		}
-        		String str = DeviceManager.decode(retTokens.toList());
+        		String str = DeviceManager.decode(chatFormat, retTokens.toList());
         		System.out.println("returned prompt len="+str.length());
         		System.out.println(str);
-                responseMessage = new ChatFormat.Message(ChatFormat.Role.ASSISTANT, str);
+                responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, str);
                 dialog.add(responseMessage);
             }
             in.close();

@@ -87,11 +87,11 @@ public final class DeviceManager {
 	 * @param it The List of integer input tokens
 	 * @return the resultant STring.
 	 */
-	public static String decode(List<Integer> it) {
+	public static String decode(ChatFormat chatFormat, List<Integer> it) {
 		//System.out.println(Arrays.toString(it.toArray()));
 		int i;
 		for(i = it.size()-1; i >= 0; i--) {
-			if(ChatFormat.stopTokens.contains(it.get(i)))
+			if(chatFormat.getStopTokens().contains(it.get(i)))
 				break;
 		}
 		IntTensor itt = new IntTensor(it.subList(0, i));

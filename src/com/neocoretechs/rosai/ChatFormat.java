@@ -25,18 +25,16 @@ import org.apache.commons.logging.LogFactory;
 public class ChatFormat {
 	private static final Log log = LogFactory.getLog(ChatFormat.class);
 	public static boolean DEBUG = true;
-	public static int endOfTurn;
-	public static int endOfSentence;
-	public static int endOfText;
-	public static Set<Integer> stopTokens;
-	static {
+	private Set<Integer> stopTokens;
+	
+	public ChatFormat() {
 		try {
 			//endOfTurn = (int) Llama3.getTokenEOTMH.invokeExact();
-			endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();
+			//endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();
 			//System.out.println("eot="+endOfTurn+" eos="+endOfSentence);
 			List<Integer> it = DeviceManager.encode("<|eot_id|>");
-			endOfText = it.get(0);
-			endOfTurn = it.get(1);
+			int endOfText = it.get(0);
+			int endOfTurn = it.get(1);
 			//System.out.println("eot="+endOfTurn+" eoText="+endOfText+" int[0]="+it.getInt(0));
 			stopTokens = Set.of(endOfText, endOfTurn);
 		} catch (Throwable e) {
@@ -44,13 +42,16 @@ public class ChatFormat {
 		}
 	}
 
+	public Set<Integer> getStopTokens() {
+		return stopTokens;
+	}
 	/**
 	 * Encode list of supplied messages into tokenized List, applying chat templates
 	 * @param appendAssistantTurn true to add a blank ASSISTANT header at the end of the list of prompts
 	 * @param dialog List of messages to tokenize
 	 * @return the tokenized list of templatized messages
 	 */
-	public static List<Integer> encodeDialogPrompt(boolean appendAssistantTurn, List<ChatFormat.Message> dialog) {
+	public List<Integer> encodeDialogPrompt(boolean appendAssistantTurn, List<ChatFormat.Message> dialog) {
 		MessageTensor mt = new MessageTensor(dialog);
 		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
 		String resStr = st.toString();
@@ -64,7 +65,7 @@ public class ChatFormat {
 	 * @param dialog list of messages to process
 	 * @return the StringTensor of templatized messages
 	 */
-	public static StringTensor extractDialogPrompt(boolean appendAssistantTurn, List<Message> dialog) {
+	public StringTensor extractDialogPrompt(boolean appendAssistantTurn, List<Message> dialog) {
 		MessageTensor mt = new MessageTensor(dialog);
 		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
 		if(DEBUG)
@@ -82,7 +83,7 @@ public class ChatFormat {
 	/**
 	 * Message record. 
 	 */
-	public record Message(ChatFormat.Role role, String content) {
+	public record Message(ChatFormat chatFormat, ChatFormat.Role role, String content) {
 		@Override
 		public String toString() {
 			return String.format("[%s] %s", role, content);
@@ -91,7 +92,7 @@ public class ChatFormat {
 		public List<Integer> encode(boolean appendAssistant) {
 			ArrayList<Message> tr = new ArrayList<Message>(1);
 			tr.add(this);
-			return encodeDialogPrompt(appendAssistant, tr);
+			return chatFormat.encodeDialogPrompt(appendAssistant, tr);
 		}
 		public String applyChatTemplate() { return applyChatTemplate(false); }
 		public String applyChatTemplate(boolean appendAssistant) {
@@ -209,11 +210,11 @@ public class ChatFormat {
 		return replaceControlCharacters(str.codePoints().toArray());
 	}
 
-	static List<Integer> encodeAsList(String text) {
+	List<Integer> encodeAsList(String text) {
 		return DeviceManager.encode(text);
 	}
 
-	static Collection<? extends Integer> encodeAsCollection(String text) {
+	Collection<? extends Integer> encodeAsCollection(String text) {
 		return encodeAsList(text);
 	}
 	
