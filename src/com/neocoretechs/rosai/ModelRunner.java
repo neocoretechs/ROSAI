@@ -51,8 +51,10 @@ import org.ros.concurrent.CancellableLoop;
 import org.ros.concurrent.CircularBlockingDeque;
 import org.ros.message.MessageListener;
 import org.ros.namespace.GraphName;
+import org.ros.namespace.NameResolver;
 import org.ros.node.AbstractNodeMain;
 import org.ros.node.ConnectedNode;
+import org.ros.node.parameter.ParameterTree;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
 
@@ -111,6 +113,9 @@ public class ModelRunner extends AbstractNodeMain {
 	static Publisher<trajectory_msgs.ComeToHeadingStamped> pubsmodelmove = null;
 	
 	ChatFormat chatFormat;
+	
+	NameResolver resolver = null;
+	ParameterTree parameterTree = null;
 
 	static class RangeTime {
 		std_msgs.String range;
@@ -121,78 +126,6 @@ public class ModelRunner extends AbstractNodeMain {
 	}
 	RangeTime ranges = new RangeTime();
 
-	/**
-	 * Parse the command line for url and xpath directive, if link encountered, recursively parse.
-	 * Impersonate user agents Mozilla, Crapple, Chrome
-	 * @param urlc  link 
-	 * @param xPath xpath directive
-	 * @return The Element that matches directive
-	 */
-	private static Element parseUrl(String urlc, String xPath) {
-		//try {	
-		Document doc = null;
-		try {
-			doc = Jsoup.connect(urlc)
-					.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-					.get();
-		} catch(IOException ioe) {
-			ioe.printStackTrace();
-			return null;
-		}
-		Element result = null;
-		Elements results = null;
-		//for(int i = 1; i < urlc.length; i++) {
-		//	results = doc.select(urlc[i]);
-		//}
-		results = doc.selectXpath(xPath);
-		if(results == null)
-			return null;
-		result = results.first();
-		if(result == null)
-			return null;
-		if(result.is("a"))
-			return parseUrl(result.attr("href"),"//a");
-		return result;
-		//System.out.printf("toString:%s text:%s wholeText:%s%n", result.toString(),result.text(),result.wholeText());
-		//System.out.printf("result is a:%b result is a[href]:%b%n",result.is("a"),result.is("a[href]"));
-		//} catch(MalformedURLException e) {
-		//	e.printStackTrace();
-		//}
-		//return null;
-	}
-	private static Element parseFile(String file, String xPath) {
-		//try {	
-		Document doc = null;
-		try {
-			if(file.startsWith("file://"))
-				file = file.substring(7);
-			File f = new File(file);
-			doc = Jsoup.parse(f);
-		} catch(IOException ioe) {
-			ioe.printStackTrace();
-			return null;
-		}
-		Element result = null;
-		Elements results = null;
-		//for(int i = 1; i < urlc.length; i++) {
-		//	results = doc.select(urlc[i]);
-		//}
-		results = doc.selectXpath(xPath);
-		if(results == null)
-			return null;
-		result = results.first();
-		if(result == null)
-			return null;
-		if(result.is("a"))
-			return parseFile(result.attr("href"),"//a");
-		return result;
-		//System.out.printf("toString:%s text:%s wholeText:%s%n", result.toString(),result.text(),result.wholeText());
-		//System.out.printf("result is a:%b result is a[href]:%b%n",result.is("a"),result.is("a[href]"));
-		//} catch(MalformedURLException e) {
-		//	e.printStackTrace();
-		//}
-		//return null;
-	}
 	/**
 	 * command /recalltime 
 	 * arg day time to end day time
@@ -245,6 +178,10 @@ public class ModelRunner extends AbstractNodeMain {
 			if(remaps.get(REMAP_DEBUG).equals("true")) {
 				DEBUG = true;
 			}
+		
+		parameterTree = connectedNode.getParameterTree();
+		resolver = setupNamespace(connectedNode, parameterTree, "config/extractor", "fail");
+		
 		SynchronizedThreadManager.getInstance().init(new String[] {"LLM","DB"});
 		NativeLoader.loadMethods();
 		//
@@ -524,6 +461,36 @@ public class ModelRunner extends AbstractNodeMain {
 	} // onStart
 	
 	/**
+	 * Extract values from the RosJavaLite parameter tree.
+	 * @param param the parameter tree
+	 * @param key the key to extract
+	 * @param defaultVal defualt if key not present
+	 * @return the key
+	 */
+	private static Object getOrDefault(ParameterTree param, String key, Object defaultVal) {
+		 Object v;
+	    if (param.has(key)) {
+	    	v = param.get(key, defaultVal);
+	    } else {
+	        param.set(key, defaultVal);
+	        v = defaultVal;
+	    }
+	    return v; 
+	}
+
+	public NameResolver setupNamespace(ConnectedNode connectedNode, ParameterTree param, String ns, String defaultns) {
+	    Object paramNsStr = getOrDefault(param, ns, defaultns);
+	    GraphName paramNamespace = null;
+	    try {
+	        paramNamespace = GraphName.of((String) paramNsStr);
+	    } catch (IllegalArgumentException iae) {
+	        log.warn("Invalid GraphName, falling back to default", iae);
+	        paramNamespace = GraphName.of(defaultns);
+	    }
+	    log.info("parameter_namespace: " + paramNamespace);
+	    return connectedNode.getResolver().newChild(paramNamespace);
+	}
+	/**
 	 * Present the tokenized prompt and perform forward inference using native Llama.cpp callout. Get back the response token list and process it.
 	 * @param promptTokens List of prompt tokens
 	 * @return The dialog as Optional String
@@ -538,6 +505,36 @@ public class ModelRunner extends AbstractNodeMain {
  		int tokNum;
         List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
         String userText = DeviceManager.decode(chatFormat, promptTokens);
+		if(userText.startsWith("http://")) {
+			try {
+				//Element e = parseUrl(userText,"//a");
+				//userText = e.text();
+			} catch(Exception e) {
+				log.info("processing URL "+userText+" failed due to :"+e.getMessage());
+				return Optional.empty();
+			}
+		} else {
+			int fileIndex = userText.indexOf("file://");
+			if(fileIndex != -1) {
+				try {
+					int suffixLen = 5;
+					int suffix = userText.indexOf(".html", fileIndex);
+					if(suffix == -1) {
+						suffix = userText.indexOf(".htm", fileIndex);
+						suffixLen  = 4;
+						if(suffix == -1)
+							return Optional.empty();
+					}
+					userText = userText.substring(fileIndex,suffix+suffixLen);
+					log.info(">>>processing File:"+userText);
+					//Element e = parseFile(userText,"//a");
+					//userText = e.text();
+				} catch(Exception e) {
+					log.info("processing file "+userText+" failed due to :"+e.getMessage());
+					return Optional.empty();
+				}
+			}
+		}
         ChatFormat.Message promptMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, userText);
         dialog.add(promptMessage);
         StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
@@ -562,28 +559,29 @@ public class ModelRunner extends AbstractNodeMain {
 			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
 		if(cleanString.length() == 0)
 			return Optional.empty();
-		if(cleanString.startsWith("http://")) {
-			try {
-				Element e = parseUrl(cleanString,"//a");
-				cleanString = e.text();
-			} catch(Exception e) {
-				log.info("processing URL "+cleanString+" failed due to :"+e.getMessage());
-				return Optional.empty();
-			}
-		} else {
-			if(cleanString.startsWith("file://")) {
+		if(cleanString.startsWith("```json")) {
+			cleanString = cleanString.substring(7,cleanString.length()-3);
+			intercept(cleanString);
+			return Optional.empty();
+		} else {	
+			if(cleanString.startsWith("http://")) {
 				try {
-					Element e = parseFile(cleanString,"//a");
-					cleanString = e.text();
+					//Element e = parseUrl(cleanString,"//a");
+					//cleanString = e.text();
 				} catch(Exception e) {
-					log.info("processing file "+cleanString+" failed due to :"+e.getMessage());
+					log.info("processing URL "+cleanString+" failed due to :"+e.getMessage());
 					return Optional.empty();
 				}
 			} else {
-				if(cleanString.startsWith("```json")) {
-					cleanString = cleanString.substring(7,cleanString.length()-3);
-					intercept(cleanString);
-					return Optional.empty();
+				if(cleanString.startsWith("file://")) {
+					try {
+						log.info(">>>processing File:"+cleanString);
+						//Element e = parseFile(cleanString,"//a");
+						//cleanString = e.text();
+					} catch(Exception e) {
+						log.info("processing file "+cleanString+" failed due to :"+e.getMessage());
+						return Optional.empty();
+					}
 				}
 			}
 		}
