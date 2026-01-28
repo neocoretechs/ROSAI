@@ -63,6 +63,7 @@ import org.json.JSONObject;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.parallel.SynchronizedThreadManager;
 import com.neocoretechs.rocksack.TransactionId;
+import com.neocoretechs.rosai.contentprocessor.ContentParser;
 import com.neocoretechs.rosai.ffi.NativeLoader;
 import com.neocoretechs.rosai.relatrix.RelatrixLSH;
 
@@ -507,8 +508,7 @@ public class ModelRunner extends AbstractNodeMain {
         String userText = DeviceManager.decode(chatFormat, promptTokens);
 		if(userText.startsWith("http://")) {
 			try {
-				//Element e = parseUrl(userText,"//a");
-				//userText = e.text();
+				userText = ContentParser.extract(userText);
 			} catch(Exception e) {
 				log.info("processing URL "+userText+" failed due to :"+e.getMessage());
 				return Optional.empty();
@@ -527,8 +527,7 @@ public class ModelRunner extends AbstractNodeMain {
 					}
 					userText = userText.substring(fileIndex,suffix+suffixLen);
 					log.info(">>>processing File:"+userText);
-					//Element e = parseFile(userText,"//a");
-					//userText = e.text();
+					userText = ContentParser.extract(userText);
 				} catch(Exception e) {
 					log.info("processing file "+userText+" failed due to :"+e.getMessage());
 					return Optional.empty();
@@ -566,8 +565,7 @@ public class ModelRunner extends AbstractNodeMain {
 		} else {	
 			if(cleanString.startsWith("http://")) {
 				try {
-					//Element e = parseUrl(cleanString,"//a");
-					//cleanString = e.text();
+					cleanString = ContentParser.extract(cleanString);
 				} catch(Exception e) {
 					log.info("processing URL "+cleanString+" failed due to :"+e.getMessage());
 					return Optional.empty();
@@ -576,8 +574,7 @@ public class ModelRunner extends AbstractNodeMain {
 				if(cleanString.startsWith("file://")) {
 					try {
 						log.info(">>>processing File:"+cleanString);
-						//Element e = parseFile(cleanString,"//a");
-						//cleanString = e.text();
+						cleanString = ContentParser.extract(cleanString.substring(7));
 					} catch(Exception e) {
 						log.info("processing file "+cleanString+" failed due to :"+e.getMessage());
 						return Optional.empty();
