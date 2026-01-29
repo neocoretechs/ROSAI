@@ -42,10 +42,6 @@ import java.util.stream.Stream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 
 import org.ros.concurrent.CancellableLoop;
 import org.ros.concurrent.CircularBlockingDeque;
@@ -65,6 +61,7 @@ import com.neocoretechs.relatrix.parallel.SynchronizedThreadManager;
 import com.neocoretechs.rocksack.TransactionId;
 import com.neocoretechs.rosai.contentprocessor.ContentParser;
 import com.neocoretechs.rosai.ffi.NativeLoader;
+import com.neocoretechs.rosai.parametertree.TreeManager;
 import com.neocoretechs.rosai.relatrix.RelatrixLSH;
 
 import diagnostic_msgs.DiagnosticStatus;
@@ -114,9 +111,6 @@ public class ModelRunner extends AbstractNodeMain {
 	static Publisher<trajectory_msgs.ComeToHeadingStamped> pubsmodelmove = null;
 	
 	ChatFormat chatFormat;
-	
-	NameResolver resolver = null;
-	ParameterTree parameterTree = null;
 
 	static class RangeTime {
 		std_msgs.String range;
@@ -180,8 +174,7 @@ public class ModelRunner extends AbstractNodeMain {
 				DEBUG = true;
 			}
 		
-		parameterTree = connectedNode.getParameterTree();
-		resolver = setupNamespace(connectedNode, parameterTree, "config/extractor", "fail");
+		TreeManager.getInstance().init(connectedNode);
 		
 		SynchronizedThreadManager.getInstance().init(new String[] {"LLM","DB"});
 		NativeLoader.loadMethods();
@@ -461,36 +454,6 @@ public class ModelRunner extends AbstractNodeMain {
 		});
 	} // onStart
 	
-	/**
-	 * Extract values from the RosJavaLite parameter tree.
-	 * @param param the parameter tree
-	 * @param key the key to extract
-	 * @param defaultVal defualt if key not present
-	 * @return the key
-	 */
-	private static Object getOrDefault(ParameterTree param, String key, Object defaultVal) {
-		 Object v;
-	    if (param.has(key)) {
-	    	v = param.get(key, defaultVal);
-	    } else {
-	        param.set(key, defaultVal);
-	        v = defaultVal;
-	    }
-	    return v; 
-	}
-
-	public NameResolver setupNamespace(ConnectedNode connectedNode, ParameterTree param, String ns, String defaultns) {
-	    Object paramNsStr = getOrDefault(param, ns, defaultns);
-	    GraphName paramNamespace = null;
-	    try {
-	        paramNamespace = GraphName.of((String) paramNsStr);
-	    } catch (IllegalArgumentException iae) {
-	        log.warn("Invalid GraphName, falling back to default", iae);
-	        paramNamespace = GraphName.of(defaultns);
-	    }
-	    log.info("parameter_namespace: " + paramNamespace);
-	    return connectedNode.getResolver().newChild(paramNamespace);
-	}
 	/**
 	 * Present the tokenized prompt and perform forward inference using native Llama.cpp callout. Get back the response token list and process it.
 	 * @param promptTokens List of prompt tokens
