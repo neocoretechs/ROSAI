@@ -3,6 +3,7 @@ package com.neocoretechs.rosai.parametertree;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -27,7 +28,7 @@ public class TreeManager {
 	private static final Log log = LogFactory.getLog(TreeManager.class);
 	private final ConcurrentHashMap<String, GraphName> graphNameCache = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, NameResolver> resolverCache = new ConcurrentHashMap<>();
-	NameResolver resolver = null;
+	
 	ConnectedNode connectedNode;
 	ParameterTree parameterTree;
 	private static volatile TreeManager instance = null;
@@ -45,6 +46,10 @@ public class TreeManager {
 		this.parameterTree = connectedNode.getParameterTree();
 	}
 
+	public void init(ParameterTree parameterTree) {
+		this.parameterTree = parameterTree;
+	}
+	
 	private TreeManager() {}
 	/**
 	 * Extract values from the RosJavaLite parameter tree.
@@ -63,23 +68,29 @@ public class TreeManager {
 	    }
 	    return v; 
 	}
+	
+	public void set(String key, Object val) {
+		parameterTree.set(key, val);
+	}
 	/**
-	 * Set up a parameter namespace key pointing to a graph name designating the
-	 * namespace for which a resolver is created. The graph name of the value for this key
-	 * then locates a name resolver that is a child of the connected node name resolver.
+	 * Use the graph name cache and resolver cache to extract a name resolver for the given namespace.<p>
+	 * Extract the graph name of the namespace nsKey, if its not found use the default namespace defaultNs.
+	 * Then place in the resolverCache a new name resolver of the result of that graph name extraction if
+	 * we cant locate the nsKey in resolverCache. The new resolver will be a child of the main node resolver.
 	 * @param nsKey The namespace key
-	 * @param defaultNs The graph name of the namespace
+	 * @param defaultNs default nmespace
 	 * @return A resolver that can resolve names in this namespace
 	 */
 	public NameResolver getResolver(String nsKey, String defaultNs) {
 	    String canonicalKey = canonicalize(nsKey);
 	    GraphName g = graphNameCache.computeIfAbsent(canonicalKey, k -> {
-	        String ns = (String) getOrDefault("/projects/" + k + "/namespace", defaultNs);
+	        String ns = (String) getOrDefault(canonicalKey, defaultNs);
 	        try { return GraphName.of(ns); }
 	        catch (IllegalArgumentException e) { return GraphName.of(defaultNs); }
 	    });
 	    return resolverCache.computeIfAbsent(canonicalKey, k -> connectedNode.getResolver().newChild(g));
 	}
+	
 	/**
 	 *  Canonicalize project key
 	 * @param raw
@@ -91,16 +102,7 @@ public class TreeManager {
     }
     
     /**
-     *  Build the parameter key used to store namespace for a project
-     * @param projectKey
-     * @return
-     */
-    public String namespaceParamKey(String projectKey) {
-        return String.format("/projects/%s/namespace", projectKey);
-    }
-
-    /**
-     *  Invalidate caches for a project (call from param listener or admin)
+     * Invalidate caches for a project (call from param listener or admin)
      * @param projectKey
      */
     public void invalidate(String projectKey) {
@@ -118,7 +120,7 @@ public class TreeManager {
     }
 
     /**
-     *  Optional: list cached project keys
+     * Optional: list cached project keys
      * @return
      */
     public Set<String> listCachedKeys() {

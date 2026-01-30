@@ -5,10 +5,15 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Stack;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.ros.node.ConnectedNode;
+
+import com.neocoretechs.rosai.parametertree.TreeManager;
 /**
  * Extract content from either URL or file by performing xpath via Jsoup.
  * Extract the specific xpath designators from the RosJavaLite ParmeterTree for the task at hand.<p>
@@ -137,11 +142,12 @@ public class ContentParser {
 		}
 		/**
 		 * Progressively extract file based content by iteratively traversing stack contents on each call
+		 * @param titleXpath the JSONArray with each title, Xpath designator for content to parse
 		 * @return The xpath descriptor group parsed results for top stack entry of file based content
 		 * @throws Exception
 		 */
-		public static String extractProgressiveContent() throws Exception {
-			StringBuilder sb = new StringBuilder();
+		public static String extractProgressiveContent(JSONArray titleXpath) throws Exception {
+			JSONObject ret = new JSONObject();
 			if(!stack.isEmpty()) {
 			    String file = stack.pop();
 			    System.out.println(">>> parsing file from link: " + file);
@@ -151,21 +157,32 @@ public class ContentParser {
 			    else
 			        fileTrim = file;
 			    File f = new File(fileTrim);
+			    for(int i = 0; i < titleXpath.length(); i++) {
+			    	JSONObject item = new JSONObject();
+			    	JSONObject titleXpathj = titleXpath.getJSONObject(i);
+			    	String title = titleXpathj.getString("title");
+			    	String xPath = titleXpathj.getString("Xpath");
+			    	String desc = parse(f,xPath);
+			    	item.put("link", f.toString());
+			    	item.put("title", title);
+			    	item.put("content", desc);
+			    	ret.append(String.valueOf(i), item);
+			    }
 			    // Extract real content
-			    String desc = parse(f, "//div[@class='description']//div[@class='block']");
-			    String methods = parse(f, "//table[contains(@class,'memberSummary')]//td[@class='colLast']");
-			    String details = parse(f, "//div[@class='details']//div[contains(@class,'block')]");
-			    if(desc != null && desc.trim().length() > 0)
-			    	sb.append("DESCRIPTION:\n" + desc);
-			    if(methods != null && methods.trim().length() > 0)
-			    	sb.append("METHOD SUMMARY:\n" + methods);
-			    if(details != null && details.trim().length() > 0)
-			    	sb.append("DETAILS:\n" + details);
+			    //String desc = parse(f, "//div[@class='description']//div[@class='block']");
+			    //String methods = parse(f, "//table[contains(@class,'memberSummary')]//td[@class='colLast']");
+			    //String details = parse(f, "//div[@class='details']//div[contains(@class,'block')]");
+			    //if(desc != null && desc.trim().length() > 0)
+			    //	sb.append("DESCRIPTION:\n" + desc);
+			    //if(methods != null && methods.trim().length() > 0)
+			    //	sb.append("METHOD SUMMARY:\n" + methods);
+			    //if(details != null && details.trim().length() > 0)
+			    //	sb.append("DETAILS:\n" + details);
 			    // Continue traversal
 			    parseLinks(f);
 			} else
 				return null;
-			return sb.toString();
+			return ret.toString();
 		}
 		/**
 		 * Extract all URL based content by iteratively traversing stack contents in a single call
@@ -411,6 +428,8 @@ public class ContentParser {
 		 * @throws Exception
 		 */
 		public static String extractProgressiveFile() throws Exception {
+			String xpathString = (String) TreeManager.getInstance().getOrDefault("parse", "");
+			JSONArray titleXpath = new JSONArray(xpathString);
 			StringBuilder sb = new StringBuilder();
 			String content = extractProgressiveStructure();
 			if(extractStructure) {
@@ -418,14 +437,14 @@ public class ContentParser {
 					visited.clear();
 					parseLinks(progressiveFileSource);
 					extractStructure  = false;
-					content = extractProgressiveContent();
+					content = extractProgressiveContent(titleXpath);
 					if(content == null)
 						return sb.toString();
 					sb.append(content);
 				}
 				return sb.toString();
 			}
-			content = extractProgressiveContent();
+			content = extractProgressiveContent(titleXpath);
 			if(content == null) {
 				visited.clear();
 				extractStructure = true;
@@ -434,18 +453,20 @@ public class ContentParser {
 			sb.append(content);
 			return sb.toString();
 		}
-		public static void main(String[] args) throws Exception {
-			if(args[0].startsWith("http")) {
+	
+		public static void unitTest(String source, ConnectedNode cn) throws Exception {
+			TreeManager.getInstance().init(cn);
+			if(source.startsWith("http")) {
 				//System.out.println(extract(args[0]));
 				// progressively extract
 				String content;
 				int item = 0;
-				System.out.println(extractProgressive(args[0]));
+				System.out.println(extractProgressive(source));
 				while((content = extractProgressiveUrl()) != null)
 					System.out.println(++item+".) "+content);
 			} else {
 				// extract file content
-				String file = args[0];
+				String file = source;
 				String fileTrim;
 				if(file.startsWith("file://"))
 					fileTrim = file.substring(7);
@@ -457,6 +478,22 @@ public class ContentParser {
 				String content;
 				int item = 0;
 				System.out.println(extractProgressive(f));
+			    // Extract real content
+				// JSONArray of JSONObjects title, xpath
+				JSONArray ja = new JSONArray();
+				JSONObject desc = new JSONObject();
+				desc.put("title","DESCRIPTION");
+			    desc.put("Xpath", "//div[@class='description']//div[@class='block']");
+			    ja.put(0,desc);
+				JSONObject meth = new JSONObject();
+				meth.put("title","METHOD SUMMARY");
+			    meth.put("Xpath", "//table[contains(@class,'memberSummary')]//td[@class='colLast']");
+			    ja.put(1,meth);
+				JSONObject deets = new JSONObject();
+				deets.put("title","DETAILS");
+			    deets.put("Xpath", "//div[@class='details']//div[contains(@class,'block')]");
+			    ja.put(2,deets);    
+			    TreeManager.getInstance().set("parse", ja.toString());
 				while((content = extractProgressiveFile()) != null)
 					System.out.println(++item+".) "+content);
 			}

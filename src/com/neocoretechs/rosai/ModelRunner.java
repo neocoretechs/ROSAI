@@ -53,7 +53,7 @@ import org.ros.node.ConnectedNode;
 import org.ros.node.parameter.ParameterTree;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
-
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
@@ -469,34 +469,6 @@ public class ModelRunner extends AbstractNodeMain {
  		int tokNum;
         List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
         String userText = DeviceManager.decode(chatFormat, promptTokens);
-		if(userText.startsWith("http://")) {
-			try {
-				userText = ContentParser.extract(userText);
-			} catch(Exception e) {
-				log.info("processing URL "+userText+" failed due to :"+e.getMessage());
-				return Optional.empty();
-			}
-		} else {
-			int fileIndex = userText.indexOf("file://");
-			if(fileIndex != -1) {
-				try {
-					int suffixLen = 5;
-					int suffix = userText.indexOf(".html", fileIndex);
-					if(suffix == -1) {
-						suffix = userText.indexOf(".htm", fileIndex);
-						suffixLen  = 4;
-						if(suffix == -1)
-							return Optional.empty();
-					}
-					userText = userText.substring(fileIndex,suffix+suffixLen);
-					log.info(">>>processing File:"+userText);
-					userText = ContentParser.extract(userText);
-				} catch(Exception e) {
-					log.info("processing file "+userText+" failed due to :"+e.getMessage());
-					return Optional.empty();
-				}
-			}
-		}
         ChatFormat.Message promptMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, userText);
         dialog.add(promptMessage);
         StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
@@ -506,6 +478,7 @@ public class ModelRunner extends AbstractNodeMain {
         }
         if(DEBUG)
         	log.info("ModelRunner.processMessage sending dialog to inference:"+p);
+    	Optional<String> cmdRes = processCommand(p.toString());
 		//try(Timer _ = Timer.log("run model interactive")) {
 			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
 			if(DEBUG)
@@ -521,30 +494,11 @@ public class ModelRunner extends AbstractNodeMain {
 			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
 		if(cleanString.length() == 0)
 			return Optional.empty();
-		if(cleanString.startsWith("```json")) {
-			cleanString = cleanString.substring(7,cleanString.length()-3);
-			intercept(cleanString);
+		cmdRes = processCommand(cleanString);
+		if(cmdRes.isEmpty())
 			return Optional.empty();
-		} else {	
-			if(cleanString.startsWith("http://")) {
-				try {
-					cleanString = ContentParser.extract(cleanString);
-				} catch(Exception e) {
-					log.info("processing URL "+cleanString+" failed due to :"+e.getMessage());
-					return Optional.empty();
-				}
-			} else {
-				if(cleanString.startsWith("file://")) {
-					try {
-						log.info(">>>processing File:"+cleanString);
-						cleanString = ContentParser.extract(cleanString.substring(7));
-					} catch(Exception e) {
-						log.info("processing file "+cleanString+" failed due to :"+e.getMessage());
-						return Optional.empty();
-					}
-				}
-			}
-		}
+		else
+			cleanString = cmdRes.get();
         ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, cleanString);
 		return Optional.ofNullable(responseMessage.applyChatTemplate());
 	}
@@ -591,6 +545,69 @@ public class ModelRunner extends AbstractNodeMain {
 		} catch (Exception e) {
 			log.info("Failed to parse model output: " + e.getMessage());
 		}
+	}
+	
+	public static Optional<String> processCommand(String cleanString) {
+		if(cleanString.startsWith("```json")) {
+			cleanString = cleanString.substring(7,cleanString.length()-3);
+			intercept(cleanString);
+			return Optional.empty();
+		} else {	
+			if(cleanString.startsWith("http://")) {
+				try {
+					cleanString = ContentParser.extract(cleanString);
+				} catch(Exception e) {
+					log.info("processing URL "+cleanString+" failed due to :"+e.getMessage());
+					return Optional.empty();
+				}
+			} else {
+				if(cleanString.startsWith("file://")) {
+					try {
+						log.info(">>>processing File:"+cleanString);
+						File f= new File(cleanString.substring(7));
+						cleanString = ContentParser.extractProgressive(f);
+					} catch(Exception e) {
+						log.info("processing file "+cleanString+" failed due to :"+e.getMessage());
+						return Optional.empty();
+					}
+				} else {
+					// specify param://key|value
+					if(cleanString.startsWith("param://")) {
+						String xsel = cleanString.substring(8);
+						String[] nsSel = xsel.split(",");
+						TreeManager.getInstance().set(nsSel[0], nsSel[1]);
+						return Optional.empty();
+					} else {
+						// pop://namespace,selector - pop the parsed link stack
+						if(cleanString.startsWith("pop://")) {
+							try {
+								cleanString = ContentParser.extractProgressiveFile();
+							} catch (Exception e) {
+								System.out.println("Exception parsing content");
+								return Optional.empty();
+							}
+						} else {
+							if(cleanString.startsWith("list://")) {
+								TreeManager.getInstance().listCachedKeys().forEach(e->{
+									System.out.println(e);
+								});
+								return Optional.empty();
+							} else {
+								if(cleanString.startsWith("remove://")) {
+									if(cleanString.length() == 9) {
+										TreeManager.getInstance().invalidateAll();
+									} else {
+										TreeManager.getInstance().invalidate(cleanString.substring(9));
+									}
+									return Optional.empty();
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		return Optional.of(cleanString);
 	}
 
 }
