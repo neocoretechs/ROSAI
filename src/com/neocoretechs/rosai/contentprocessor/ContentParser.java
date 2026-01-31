@@ -114,29 +114,32 @@ public class ContentParser {
 		 * @return The one monolithic string of entire parsed file based structure
 		 * @throws Exception
 		 */
-		public static String extractAllContent() throws Exception {
+		public static String extractAllContent(JSONArray titleXpath) throws Exception {
 			StringBuilder sb = new StringBuilder();
 			while (!stack.isEmpty()) {
-			    String file = stack.pop();
-			    System.out.println(">>> parsing file from link: " + file);
-			    String fileTrim;
-			    if (file.startsWith("file:/"))
-			        fileTrim = file.substring(6);
-			    else
-			        fileTrim = file;
-			    File f = new File(fileTrim);
-			    // Extract real content
-			    String desc = parse(f, "//div[@class='description']//div[@class='block']");
-			    String methods = parse(f, "//table[contains(@class,'memberSummary')]//td[@class='colLast']");
-			    String details = parse(f, "//div[@class='details']//div[contains(@class,'block')]");
-			    if(desc != null && desc.trim().length() > 0)
-			    	sb.append("DESCRIPTION:\n" + desc);
-			    if(methods != null && methods.trim().length() > 0)
-			    	sb.append("METHOD SUMMARY:\n" + methods);
-			    if(details != null && details.trim().length() > 0)
-			    	sb.append("DETAILS:\n" + details);
-			    // Continue traversal
-			    parseLinks(f);
+				String file = stack.pop();
+				System.out.println(">>> parsing file from link: " + file);
+				String fileTrim;
+				if (file.startsWith("file:/"))
+					fileTrim = file.substring(6);
+				else
+					fileTrim = file;
+				File f = new File(fileTrim);
+				// Extract real content
+				for(int i = 0; i < titleXpath.length(); i++) {
+					JSONObject item = new JSONObject();
+					JSONObject titleXpathj = titleXpath.getJSONObject(i);
+					String title = titleXpathj.getString("title");
+					String xPath = titleXpathj.getString("Xpath");
+					String desc = parse(f,xPath);
+					sb.append(f.toString());
+					sb.append("\r\n");
+					sb.append(title);
+					sb.append("\r\n");
+					sb.append(desc);
+					sb.append("\r\n");
+					parseLinks(f);
+				}
 			}
 			return sb.toString();
 		}
@@ -146,7 +149,7 @@ public class ContentParser {
 		 * @return The xpath descriptor group parsed results for top stack entry of file based content
 		 * @throws Exception
 		 */
-		public static String extractProgressiveContent(JSONArray titleXpath) throws Exception {
+		public static String extractProgressiveContentJson(JSONArray titleXpath) throws Exception {
 			JSONObject ret = new JSONObject();
 			if(!stack.isEmpty()) {
 			    String file = stack.pop();
@@ -185,25 +188,62 @@ public class ContentParser {
 			return ret.toString();
 		}
 		/**
+		 * Progressively extract file based content by iteratively traversing stack contents on each call
+		 * @param titleXpath the JSONArray with each title, Xpath designator for content to parse
+		 * @return The xpath descriptor group parsed results for top stack entry of file based content
+		 * @throws Exception
+		 */
+		public static String extractProgressiveContent(JSONArray titleXpath) throws Exception {
+			StringBuilder ret = new StringBuilder();
+			if(!stack.isEmpty()) {
+			    String file = stack.pop();
+			    System.out.println(">>> parsing file from link: " + file);
+			    String fileTrim;
+			    if (file.startsWith("file:/"))
+			        fileTrim = file.substring(6);
+			    else
+			        fileTrim = file;
+			    File f = new File(fileTrim);
+			    for(int i = 0; i < titleXpath.length(); i++) {
+			    	JSONObject titleXpathj = titleXpath.getJSONObject(i);
+			    	String title = titleXpathj.getString("title");
+			    	String xPath = titleXpathj.getString("Xpath");
+			    	String desc = parse(f,xPath);
+			    	ret.append(f.toString());
+			    	ret.append("\r\n");
+			    	ret.append(title);
+			    	ret.append("\r\n");
+			    	ret.append(desc);
+			    	ret.append("\r\n");
+			    }
+			    parseLinks(f);
+			} else
+				return null;
+			return ret.toString();
+		}
+		/**
 		 * Extract all URL based content by iteratively traversing stack contents in a single call
 		 * @return The xpath descriptor group parsed results for all stack entries
 		 * @throws Exception
 		 */
-		public static String extractAllContentUrl() throws Exception {
+		public static String extractAllContentUrl(JSONArray titleXpath) throws Exception {
 			StringBuilder sb = new StringBuilder();
 			while (!stack.isEmpty()) {
 			    String url = stack.pop();
 			    System.out.println(">>> parsing file from url: " + url);
 			    // Extract real content
-			    String desc = parse(url, "//div[@class='description']//div[@class='block']");
-			    String methods = parse(url, "//table[contains(@class,'memberSummary')]//td[@class='colLast']");
-			    String details = parse(url, "//div[@class='details']//div[contains(@class,'block')]");
-			    if(desc != null && desc.trim().length() > 0)
-			    	sb.append("DESCRIPTION:\n" + desc);
-			    if(methods != null && methods.trim().length() > 0)
-			    	sb.append("METHOD SUMMARY:\n" + methods);
-			    if(details != null && details.trim().length() > 0)
-			    	sb.append("DETAILS:\n" + details);
+			    for(int i = 0; i < titleXpath.length(); i++) {
+			    	JSONObject titleXpathj = titleXpath.getJSONObject(i);
+			    	String title = titleXpathj.getString("title");
+			    	String xPath = titleXpathj.getString("Xpath");
+			    	String desc = parse(url,xPath);
+			    	sb.append(url.toString());
+			    	sb.append("\r\n");
+			    	sb.append(title);
+			    	sb.append("\r\n");
+			    	sb.append(desc);
+			    	sb.append("\r\n");
+			    }
 			    // Continue traversal
 			    parseLinks(url);
 			}
@@ -214,21 +254,24 @@ public class ContentParser {
 		 * @return The xpath descriptor group parsed results for top stack entry. null if stack is empty.
 		 * @throws Exception
 		 */
-		public static String extractProgressiveContentUrl() throws Exception {
+		public static String extractProgressiveContentUrl(JSONArray titleXpath) throws Exception {
 			StringBuilder sb = new StringBuilder();
 			if(!stack.isEmpty()) {
 			    String url = stack.pop();
 			    System.out.println(">>> parsing file from url: " + url);
 			    // Extract real content
-			    String desc = parse(url, "//div[@class='description']//div[@class='block']");
-			    String methods = parse(url, "//table[contains(@class,'memberSummary')]//td[@class='colLast']");
-			    String details = parse(url, "//div[@class='details']//div[contains(@class,'block')]");
-			    if(desc != null && desc.trim().length() > 0)
-			    	sb.append("DESCRIPTION:\n" + desc);
-			    if(methods != null && methods.trim().length() > 0)
-			    	sb.append("METHOD SUMMARY:\n" + methods);
-			    if(details != null && details.trim().length() > 0)
-			    	sb.append("DETAILS:\n" + details);
+			    for(int i = 0; i < titleXpath.length(); i++) {
+			    	JSONObject titleXpathj = titleXpath.getJSONObject(i);
+			    	String title = titleXpathj.getString("title");
+			    	String xPath = titleXpathj.getString("Xpath");
+			    	String desc = parse(url,xPath);
+			    	sb.append(url.toString());
+			    	sb.append("\r\n");
+			    	sb.append(title);
+			    	sb.append("\r\n");
+			    	sb.append(desc);
+			    	sb.append("\r\n");
+			    }
 			    // Continue traversal
 			    parseLinks(url);
 			} else
@@ -325,6 +368,8 @@ public class ContentParser {
 		 * @throws Exception
 		 */
 		public static String extract(String source) throws Exception {
+			String xpathString = (String) TreeManager.getInstance().getOrDefault("parse", "");
+			JSONArray titleXpath = new JSONArray(xpathString);
 			StringBuilder sb = new StringBuilder();
 			String s = ContentParser.parse(source,"//a");
 			if(s != null)
@@ -333,7 +378,7 @@ public class ContentParser {
 			sb.append(extractAllStructureUrl());
 			visited.clear();
 			parseLinks(source);
-			sb.append(extractAllContentUrl());
+			sb.append(extractAllContentUrl(titleXpath));
 			return sb.toString();
 		}
 		/**
@@ -359,6 +404,8 @@ public class ContentParser {
 		 * @throws Exception
 		 */
 		public static String extractProgressiveUrl() throws Exception {
+			String xpathString = (String) TreeManager.getInstance().getOrDefault("parse", "");
+			JSONArray titleXpath = new JSONArray(xpathString);
 			StringBuilder sb = new StringBuilder();
 			String content = extractProgressiveStructureUrl();
 			if(extractStructure) {
@@ -366,14 +413,14 @@ public class ContentParser {
 					visited.clear();
 					parseLinks(progressiveUrlSource);
 					extractStructure  = false;
-					content = extractProgressiveContentUrl();
+					content = extractProgressiveContentUrl(titleXpath);
 					if(content == null)
 						return sb.toString();
 					sb.append(content);
 				}
 				return sb.toString();
 			}
-			content = extractProgressiveContentUrl();
+			content = extractProgressiveContentUrl(titleXpath);
 			if(content == null) {
 				visited.clear();
 				extractStructure = true;
@@ -390,6 +437,8 @@ public class ContentParser {
 		 * @throws Exception
 		 */
 		public static String extract(File source) throws Exception {
+			String xpathString = (String) TreeManager.getInstance().getOrDefault("parse", "");
+			JSONArray titleXpath = new JSONArray(xpathString);
 			// extract file content
 			StringBuilder sb = new StringBuilder();
 			String s = ContentParser.parse(source,"//a");
@@ -401,7 +450,7 @@ public class ContentParser {
 			sb.append(extractAllStructure());
 			visited.clear();
 			parseLinks(source);
-			sb.append(extractAllContent());
+			sb.append(extractAllContent(titleXpath));
 			return sb.toString();
 		}
 		/**
@@ -421,6 +470,39 @@ public class ContentParser {
 			progressiveFileSource = source;
 			return sb.toString();
 		}
+		/**
+		 * Continue with progressive extraction after initial call to extractProgressive.
+		 * Call repeatedly until null is returned.
+		 * @return The next item on the stack of File based content, parsed.
+		 * @throws Exception
+		 */
+		public static String extractProgressiveFileJson() throws Exception {
+			String xpathString = (String) TreeManager.getInstance().getOrDefault("parse", "");
+			JSONArray titleXpath = new JSONArray(xpathString);
+			StringBuilder sb = new StringBuilder();
+			String content = extractProgressiveStructure();
+			if(extractStructure) {
+				if(content == null) {
+					visited.clear();
+					parseLinks(progressiveFileSource);
+					extractStructure  = false;
+					content = extractProgressiveContentJson(titleXpath);
+					if(content == null)
+						return sb.toString();
+					sb.append(content);
+				}
+				return sb.toString();
+			}
+			content = extractProgressiveContentJson(titleXpath);
+			if(content == null) {
+				visited.clear();
+				extractStructure = true;
+				return null;
+			}
+			sb.append(content);
+			return sb.toString();
+		}
+		
 		/**
 		 * Continue with progressive extraction after initial call to extractProgressive.
 		 * Call repeatedly until null is returned.
@@ -453,7 +535,6 @@ public class ContentParser {
 			sb.append(content);
 			return sb.toString();
 		}
-	
 		public static void unitTest(String source, ConnectedNode cn) throws Exception {
 			TreeManager.getInstance().init(cn);
 			if(source.startsWith("http")) {
