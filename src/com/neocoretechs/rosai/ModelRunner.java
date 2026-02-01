@@ -556,8 +556,7 @@ public class ModelRunner extends AbstractNodeMain {
 				try {
 					chatMessage = ContentParser.extract(chatMessage);
 				} catch(Exception e) {
-					log.info("processing URL "+chatMessage+" failed due to :"+e.getMessage());
-					return Optional.empty();
+					return Optional.of("processing URL "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
 				}
 			} else {
 				if(chatMessage.startsWith("file://")) {
@@ -566,8 +565,7 @@ public class ModelRunner extends AbstractNodeMain {
 						File f= new File(chatMessage.substring(7));
 						chatMessage = ContentParser.extractProgressive(f);
 					} catch(Exception e) {
-						log.info("processing file "+chatMessage+" failed due to :"+e.getMessage());
-						return Optional.empty();
+						return Optional.of("processing file "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
 					}
 				} else {
 					// specify param://key|value
@@ -575,22 +573,23 @@ public class ModelRunner extends AbstractNodeMain {
 						String xsel = chatMessage.substring(8);
 						String[] nsSel = xsel.split(",");
 						TreeManager.getInstance().set(nsSel[0], nsSel[1]);
-						return Optional.empty();
+						return Optional.of("Parameter "+xsel+" set Ok at "+ LocalDateTime.now());
 					} else {
 						// pop://namespace,selector - pop the parsed link stack
 						if(chatMessage.startsWith("pop://")) {
 							try {
 								chatMessage = ContentParser.extractProgressiveFile();
 							} catch (Exception e) {
-								System.out.println("Exception parsing content");
-								return Optional.empty();
+								return Optional.of("Exception parsing content "+e.getMessage()+" at "+ LocalDateTime.now());
 							}
 						} else {
 							if(chatMessage.startsWith("list://")) {
+								StringBuilder sb = new StringBuilder("Keys:");
 								TreeManager.getInstance().listCachedKeys().forEach(e->{
-									System.out.println(e);
+									sb.append(e.toString());
+									sb.append(",");
 								});
-								return Optional.empty();
+								return Optional.of(sb.toString()+" at "+LocalDateTime.now());
 							} else {
 								if(chatMessage.startsWith("remove://")) {
 									if(chatMessage.length() == 9) {
@@ -598,25 +597,25 @@ public class ModelRunner extends AbstractNodeMain {
 									} else {
 										TreeManager.getInstance().invalidate(chatMessage.substring(9));
 									}
-									return Optional.empty();
+									return Optional.of("Parameters removed Ok at "+ LocalDateTime.now());
 								} else {
 									if(chatMessage.startsWith("dbfile://") ) {
 										try {
 											File f= new File(chatMessage.substring(9));
 											SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, f);
 										} catch (Exception e) {
-											System.out.println("Exception parsing file content "+e.getMessage());
+											return Optional.of("Exception parsing file content "+e.getMessage()+" at "+ LocalDateTime.now());
 										}
-										return Optional.empty();
+										return Optional.of("Frontload database Ok at "+ LocalDateTime.now());
 									} else {
 										if(chatMessage.startsWith("dburl://") ) {
 											try {
 												chatMessage = chatMessage.substring(8);
 												SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, chatMessage);
 											} catch (Exception e) {
-												System.out.println("Exception parsing url content "+e.getMessage());
+												return Optional.of("Exception parsing url content "+e.getMessage()+" at "+ LocalDateTime.now());
 											}
-											return Optional.empty();
+											return Optional.of("Frontload database Ok at "+ LocalDateTime.now());
 										}
 									}
 								}
