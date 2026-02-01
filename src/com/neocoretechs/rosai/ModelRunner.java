@@ -261,7 +261,8 @@ public class ModelRunner extends AbstractNodeMain {
 						String fileName = Llama3.options.modelPath().getFileName().toString();
 						int dotIndex = fileName.lastIndexOf('.');     
 						fileName = (dotIndex == -1) ? fileName : fileName.substring(0, dotIndex);
-						SystemPrompts.frontloadDb(relatrixLSH, chatFormat, fileName+".txt");
+						File f = new File(fileName+".txt");
+						SystemPrompts.frontloadDb(relatrixLSH, chatFormat, f);
 					} catch (IOException e) {
 						e.printStackTrace();
 					}
@@ -304,20 +305,22 @@ public class ModelRunner extends AbstractNodeMain {
 		subsuser.addMessageListener(new MessageListener<std_msgs.String>() {
 			@Override
 			public void onNewMessage(std_msgs.String message) {
-				//try {
-				//	dbLatch.await();
-				//} catch (InterruptedException e) { return; }
-				processRole(message.getData(), ChatFormat.Role.USER);
+				Optional<String> cmdRes = processIncomingCommand(message.getData());
+				if(cmdRes.isEmpty())
+					processRole(message.getData(), ChatFormat.Role.USER);
+				else
+					processRole(cmdRes.get(), ChatFormat.Role.USER);
 			}
 		});
 
 		subsystem.addMessageListener(new MessageListener<std_msgs.String>() {
 			@Override
 			public void onNewMessage(std_msgs.String message) {
-				//try {
-				//	dbLatch.await();
-				//} catch (InterruptedException e) { return; }
-				processRole(message.getData(), ChatFormat.Role.SYSTEM);
+				Optional<String> cmdRes = processIncomingCommand(message.getData());
+				if(cmdRes.isEmpty())
+					processRole(message.getData(), ChatFormat.Role.SYSTEM);
+				else
+					processRole(cmdRes.get(), ChatFormat.Role.SYSTEM);
 			}
 		});
 	
@@ -459,7 +462,7 @@ public class ModelRunner extends AbstractNodeMain {
 	 * @param promptTokens List of prompt tokens
 	 * @return The dialog as Optional String
 	 */
-	private static Optional<String> processMessage(ChatFormat chatFormat, List<Integer> promptTokens) {
+	private Optional<String> processMessage(ChatFormat chatFormat, List<Integer> promptTokens) {
 		try {
 			dbLatch.await();
 		} catch (InterruptedException e) {
@@ -478,7 +481,6 @@ public class ModelRunner extends AbstractNodeMain {
         }
         if(DEBUG)
         	log.info("ModelRunner.processMessage sending dialog to inference:"+p);
-    	Optional<String> cmdRes = processCommand(p.toString());
 		//try(Timer _ = Timer.log("run model interactive")) {
 			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
 			if(DEBUG)
@@ -494,11 +496,9 @@ public class ModelRunner extends AbstractNodeMain {
 			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
 		if(cleanString.length() == 0)
 			return Optional.empty();
-		cmdRes = processCommand(cleanString);
-		if(cmdRes.isEmpty())
-			return Optional.empty();
-		else
-			cleanString = cmdRes.get();
+		Optional<String> cmdRes = processOutgoingCommand(cleanString);
+		if(!cmdRes.isEmpty())
+			return cmdRes;
         ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, cleanString);
 		return Optional.ofNullable(responseMessage.applyChatTemplate());
 	}
@@ -547,59 +547,78 @@ public class ModelRunner extends AbstractNodeMain {
 		}
 	}
 	
-	public static Optional<String> processCommand(String cleanString) {
-		if(cleanString.startsWith("```json")) {
-			cleanString = cleanString.substring(7,cleanString.length()-3);
-			intercept(cleanString);
+	public Optional<String> processIncomingCommand(String chatMessage) {
+		if(chatMessage.startsWith("{")) {
+			intercept(chatMessage);
 			return Optional.empty();
 		} else {	
-			if(cleanString.startsWith("http://")) {
+			if(chatMessage.startsWith("http://")) {
 				try {
-					cleanString = ContentParser.extract(cleanString);
+					chatMessage = ContentParser.extract(chatMessage);
 				} catch(Exception e) {
-					log.info("processing URL "+cleanString+" failed due to :"+e.getMessage());
+					log.info("processing URL "+chatMessage+" failed due to :"+e.getMessage());
 					return Optional.empty();
 				}
 			} else {
-				if(cleanString.startsWith("file://")) {
+				if(chatMessage.startsWith("file://")) {
 					try {
-						log.info(">>>processing File:"+cleanString);
-						File f= new File(cleanString.substring(7));
-						cleanString = ContentParser.extractProgressive(f);
+						log.info(">>>processing File:"+chatMessage);
+						File f= new File(chatMessage.substring(7));
+						chatMessage = ContentParser.extractProgressive(f);
 					} catch(Exception e) {
-						log.info("processing file "+cleanString+" failed due to :"+e.getMessage());
+						log.info("processing file "+chatMessage+" failed due to :"+e.getMessage());
 						return Optional.empty();
 					}
 				} else {
 					// specify param://key|value
-					if(cleanString.startsWith("param://")) {
-						String xsel = cleanString.substring(8);
+					if(chatMessage.startsWith("param://")) {
+						String xsel = chatMessage.substring(8);
 						String[] nsSel = xsel.split(",");
 						TreeManager.getInstance().set(nsSel[0], nsSel[1]);
 						return Optional.empty();
 					} else {
 						// pop://namespace,selector - pop the parsed link stack
-						if(cleanString.startsWith("pop://")) {
+						if(chatMessage.startsWith("pop://")) {
 							try {
-								cleanString = ContentParser.extractProgressiveFile();
+								chatMessage = ContentParser.extractProgressiveFile();
 							} catch (Exception e) {
 								System.out.println("Exception parsing content");
 								return Optional.empty();
 							}
 						} else {
-							if(cleanString.startsWith("list://")) {
+							if(chatMessage.startsWith("list://")) {
 								TreeManager.getInstance().listCachedKeys().forEach(e->{
 									System.out.println(e);
 								});
 								return Optional.empty();
 							} else {
-								if(cleanString.startsWith("remove://")) {
-									if(cleanString.length() == 9) {
+								if(chatMessage.startsWith("remove://")) {
+									if(chatMessage.length() == 9) {
 										TreeManager.getInstance().invalidateAll();
 									} else {
-										TreeManager.getInstance().invalidate(cleanString.substring(9));
+										TreeManager.getInstance().invalidate(chatMessage.substring(9));
 									}
 									return Optional.empty();
+								} else {
+									if(chatMessage.startsWith("dbfile://") ) {
+										try {
+											File f= new File(chatMessage.substring(9));
+											SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, f);
+										} catch (Exception e) {
+											System.out.println("Exception parsing file content "+e.getMessage());
+										}
+										return Optional.empty();
+									} else {
+										if(chatMessage.startsWith("dburl://") ) {
+											try {
+												chatMessage = chatMessage.substring(8);
+												SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, chatMessage);
+											} catch (Exception e) {
+												System.out.println("Exception parsing url content "+e.getMessage());
+											}
+											return Optional.empty();
+										}
+									}
 								}
 							}
 						}
@@ -607,7 +626,92 @@ public class ModelRunner extends AbstractNodeMain {
 				}
 			}
 		}
-		return Optional.of(cleanString);
+		return Optional.of(chatMessage);
+	}
+	
+	public Optional<String> processOutgoingCommand(String cleanString) {
+		String stripString = chatFormat.stripFormatting(cleanString);
+		ChatFormat.Message responseMessage = null;
+		if(stripString.startsWith("```json")) {
+			stripString = stripString.substring(7,cleanString.length()-3);
+			intercept(stripString);
+			responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, " JSON command sent Ok at "+ LocalDateTime.now());
+		} else {	
+			if(stripString.startsWith("http://")) {
+				try {
+					responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, ContentParser.extract(stripString));
+				} catch(Exception e) {
+					responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "processing URL "+cleanString+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
+				}
+			} else {
+				if(stripString.startsWith("file://")) {
+					try {
+						File f= new File(stripString.substring(7));
+						responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, ContentParser.extractProgressive(f));
+					} catch(Exception e) {
+						responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "processing file "+cleanString+" failed due to :"+e.getMessage()+" at "+LocalDateTime.now());
+					}
+				} else {
+					// specify param://key|value
+					if(stripString.startsWith("param://")) {
+						String xsel = stripString.substring(8);
+						String[] nsSel = xsel.split(",");
+						TreeManager.getInstance().set(nsSel[0], nsSel[1]);
+						responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Parameter "+xsel+" set Ok at "+ LocalDateTime.now());
+					} else {
+						// pop://namespace,selector - pop the parsed link stack
+						if(stripString.startsWith("pop://")) {
+							try {
+								responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, ContentParser.extractProgressiveFile());
+							} catch (Exception e) {
+								responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Processing link failed due to :"+e.getMessage()+" at "+LocalDateTime.now());
+							}
+						} else {
+							if(stripString.startsWith("list://")) {
+								StringBuilder sb = new StringBuilder("Keys:");
+								TreeManager.getInstance().listCachedKeys().forEach(e->{
+									sb.append(e.toString());
+									sb.append(",");
+								});
+								responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Parameter "+sb.toString()+" at "+ LocalDateTime.now());
+							} else {
+								if(stripString.startsWith("remove://")) {
+									if(stripString.length() == 9) {
+										TreeManager.getInstance().invalidateAll();
+									} else {
+										TreeManager.getInstance().invalidate(stripString.substring(9));
+									}
+									responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Parameters removed Ok at "+ LocalDateTime.now());
+								} else {
+									if(stripString.startsWith("dbfile://") ) {
+										try {
+											File f= new File(stripString.substring(9));
+											SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, f);
+											responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Frontload database Ok at "+ LocalDateTime.now());
+										} catch (Exception e) {
+											responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Frontload database failed due to :"+e.getMessage()+" at "+LocalDateTime.now());
+										}	
+									} else {
+										if(stripString.startsWith("dburl://") ) {
+											try {
+												stripString = stripString.substring(8);
+												SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, stripString);
+												responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Frontload database Ok at "+ LocalDateTime.now());
+											} catch (Exception e) {
+												responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, "Frontload database failed due to :"+e.getMessage()+" at "+LocalDateTime.now());
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if(responseMessage == null)
+			return Optional.empty();
+		return Optional.ofNullable(responseMessage.applyChatTemplate());
 	}
 
 }

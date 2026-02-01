@@ -146,7 +146,7 @@ public class ContentParser {
 		/**
 		 * Progressively extract file based content by iteratively traversing stack contents on each call
 		 * @param titleXpath the JSONArray with each title, Xpath designator for content to parse
-		 * @return The xpath descriptor group parsed results for top stack entry of file based content
+		 * @return The xpath descriptor group parsed results for top stack entry of file based content in JSON format
 		 * @throws Exception
 		 */
 		public static String extractProgressiveContentJson(JSONArray titleXpath) throws Exception {
@@ -277,6 +277,32 @@ public class ContentParser {
 			} else
 				return null;
 			return sb.toString();
+		}
+		/**
+		 * Progressively extract URL based content by iteratively traversing stack contents on each call
+		 * @return The xpath descriptor group parsed results for top stack entry in JSON format. null if stack is empty.
+		 * @throws Exception
+		 */
+		public static String extractProgressiveContentUrlJson(JSONArray titleXpath) throws Exception {
+			JSONObject ret = new JSONObject();
+			if(!stack.isEmpty()) {
+			    String url = stack.pop();
+			    System.out.println(">>> parsing url from: " + url);
+			    for(int i = 0; i < titleXpath.length(); i++) {
+			    	JSONObject item = new JSONObject();
+			    	JSONObject titleXpathj = titleXpath.getJSONObject(i);
+			    	String title = titleXpathj.getString("title");
+			    	String xPath = titleXpathj.getString("Xpath");
+			    	String desc = parse(url,xPath);
+			    	item.put("link", url);
+			    	item.put("title", title);
+			    	item.put("content", desc);
+			    	ret.append(String.valueOf(i), item);
+			    }
+			    parseLinks(url);
+			} else
+				return null;
+			return ret.toString();
 		}
 		/**
 		 * Extract the entire structure of File based links on the stack by popping stack entries until empty.

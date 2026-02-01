@@ -1,5 +1,6 @@
 package com.neocoretechs.rosai.parametertree;
 
+import java.io.File;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
@@ -9,11 +10,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.ros.namespace.GraphName;
 import org.ros.namespace.NameResolver;
 import org.ros.node.ConnectedNode;
 import org.ros.node.parameter.ParameterTree;
+
 /**
 *<p>
 * Example usage: get resolver for project "rocksack"
@@ -73,6 +76,23 @@ public class TreeManager {
 		parameterTree.set(key, val);
 	}
 	/**
+	 * Set up the parameter tree for parsing via ContentParser. The xPath array
+	 * has title in (0,1) and xpath designator in (0,2)
+	 * @see com.neocoretechs.rosai.contentprocessor.ContentParser
+	 * @param xPath String array of xpath designator and its title
+	 * @throws Exception
+	 */
+	public void setupParser(String[][] xPath) {
+		JSONArray ja = new JSONArray();
+		for(int i = 0; i < xPath.length; i++) {
+			JSONObject desc = new JSONObject();
+			desc.put("title",xPath[i][0]);
+			desc.put("Xpath", xPath[i][1]);
+			ja.put(i,desc);
+		}
+		getInstance().set("parse", ja.toString());
+	}
+	/**
 	 * Use the graph name cache and resolver cache to extract a name resolver for the given namespace.<p>
 	 * Extract the graph name of the namespace nsKey, if its not found use the default namespace defaultNs.
 	 * Then place in the resolverCache a new name resolver of the result of that graph name extraction if
@@ -92,7 +112,7 @@ public class TreeManager {
 	}
 	
 	/**
-	 *  Canonicalize project key
+	 * Canonicalize project key
 	 * @param raw
 	 * @return
 	 */

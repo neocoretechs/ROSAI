@@ -1,10 +1,16 @@
 package com.neocoretechs.rosai;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.List;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import com.neocoretechs.rosai.contentprocessor.ContentParser;
+import com.neocoretechs.rosai.parametertree.TreeManager;
 import com.neocoretechs.rosai.relatrix.RelatrixLSH;
 
 
@@ -20,21 +26,98 @@ final class SystemPrompts {
     public static ChatFormat.Message system(ChatFormat chatFormat, String content) {
         return new ChatFormat.Message(chatFormat, ChatFormat.Role.SYSTEM, content.strip());
     }
-    public static void frontloadDb(RelatrixLSH db, ChatFormat chatFormat, String fileName) throws IOException {
-        try (BufferedReader reader = new BufferedReader(new FileReader(fileName))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                // Parse fields: timestamp | role | prompt | response
-                String[] parts = line.split("\\|");
-                Long ts = Long.parseLong(parts[0].trim());
-                ChatFormat.Role role = ChatFormat.Role.valueOf(parts[1].trim().toUpperCase());
-                String prompt = parts[2].trim();
-                String response = parts[3].trim();
-                ChatFormat.Message cProm = new ChatFormat.Message(chatFormat, role, prompt);
-                ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
-                db.addInteraction(ts, role, cProm.encode(), cResp.encode());
-            }
-        }
+    /**
+     * Front load the database from delimited text file. delim is vertical bar, elements are timestamp|role|prompt|response.
+     * @see RelatrixLSH
+     * @see ChatFormat
+     * @param db The RelatrixLSH db
+     * @param chatFormat ChatFormat instance
+     * @param f file to parse
+     * @throws IOException
+     */
+    public static void frontloadDb(RelatrixLSH db, ChatFormat chatFormat, File f) throws IOException {
+    	try (BufferedReader reader = new BufferedReader(new FileReader(f))) {
+    		String line;
+    		while ((line = reader.readLine()) != null) {
+    			// Parse fields: timestamp | role | prompt | response
+    			String[] parts = line.split("\\|");
+    			Long ts = Long.parseLong(parts[0].trim());
+    			ChatFormat.Role role = ChatFormat.Role.valueOf(parts[1].trim().toUpperCase());
+    			String prompt = parts[2].trim();
+    			String response = parts[3].trim();
+    			ChatFormat.Message cProm = new ChatFormat.Message(chatFormat, role, prompt);
+    			ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
+    			db.addInteraction(ts, role, cProm.encode(), cResp.encode());
+    		}
+    	}
+    }
+    /**
+     * Assume the xpath parse is set in parametertree format: <p>
+     * JSONArray(0) = desc.put("title",string[(0,1)); <br>
+	 * desc.put("Xpath", string(0,2));
+	 * @see RelatrixLSH
+     * @see ChatFormat
+     * @see TreeManager#setupParser(String[][])
+     * @param db The RelatrixLSH db
+     * @param chatFormat ChatFormat instance
+     * @param f The html file
+     * @throws IOException
+     */
+    public static void frontloadDbFromHtml(RelatrixLSH db, ChatFormat chatFormat, File f) throws Exception {
+    	//JSONArray ja = new JSONArray();
+    	//for(int i = 0; i < xPath.length; i++) {
+    	//	JSONObject desc = new JSONObject();
+    	//	desc.put("title",xPath[i][1]);
+    	//	desc.put("Xpath", xPath[i][2]);
+    	//	ja.put(i,desc);
+    	//}
+    	//TreeManager.getInstance().set("parse", ja.toString());
+    	String response = ContentParser.extractProgressive(f);
+    	Long ts = System.currentTimeMillis();
+    	ChatFormat.Role role = ChatFormat.Role.USER;
+    	String prompt = "";
+    	ChatFormat.Message cProm = new ChatFormat.Message(chatFormat, role, prompt);
+    	ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
+    	db.addInteraction(ts, role, cProm.encode(), cResp.encode());
+    	while ((response = ContentParser.extractProgressiveFile()) != null) {
+    		ts = System.currentTimeMillis();
+    		cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
+    		db.addInteraction(ts, role, cProm.encode(), cResp.encode());
+    	}
+    }
+    /**
+     * Assume the xpath parse is set in parametertree format: <p>
+     * JSONArray(0) = desc.put("title",string[(0,1)); <br>
+	 * desc.put("Xpath", string(0,2));
+	 * @see RelatrixLSH
+     * @see ChatFormat
+     * @see TreeManager#setupParser(String[][])
+     * @param db The RelatrixLSH db
+     * @param chatFormat ChatFormat instance
+     * @param s The html URL
+     * @throws IOException
+     */
+    public static void frontloadDbFromHtml(RelatrixLSH db, ChatFormat chatFormat, String s) throws Exception {
+    	//JSONArray ja = new JSONArray();
+    	//for(int i = 0; i < xPath.length; i++) {
+    	//	JSONObject desc = new JSONObject();
+    	//	desc.put("title",xPath[i][1]);
+    	//	desc.put("Xpath", xPath[i][2]);
+    	//	ja.put(i,desc);
+    	//}
+    	//TreeManager.getInstance().set("parse", ja.toString());
+    	String response = ContentParser.extractProgressive(s);
+    	Long ts = System.currentTimeMillis();
+    	ChatFormat.Role role = ChatFormat.Role.USER;
+    	String prompt = "";
+    	ChatFormat.Message cProm = new ChatFormat.Message(chatFormat, role, prompt);
+    	ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
+    	db.addInteraction(ts, role, cProm.encode(), cResp.encode());
+    	while ((response = ContentParser.extractProgressiveUrl()) != null) {
+    		ts = System.currentTimeMillis();
+    		cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
+    		db.addInteraction(ts, role, cProm.encode(), cResp.encode());
+    	}
     }
 }
 
