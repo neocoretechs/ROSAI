@@ -82,7 +82,11 @@ final class SystemPrompts {
     	ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
     	db.addInteraction(ts, role, cProm.encode(), cResp.encode());
     	while ((prompt = ContentParser.extractProgressiveFile()) != null) {
+    		if(prompt.isBlank())
+    			continue;
     		cProm = new ChatFormat.Message(chatFormat, role, prompt);
+    		ts = System.currentTimeMillis();
+    		Thread.sleep(1);
     		db.addInteraction(ts, role, cProm.encode(), cResp.encode());
     	}
     }
@@ -115,7 +119,11 @@ final class SystemPrompts {
     	ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
     	db.addInteraction(ts, role, cProm.encode(), cResp.encode());
     	while ((prompt = ContentParser.extractProgressiveUrl()) != null) {
+    		if(prompt.isBlank())
+    			continue;
     		cProm = new ChatFormat.Message(chatFormat, role, prompt);
+    		ts = System.currentTimeMillis();
+    		Thread.sleep(1);
     		db.addInteraction(ts, role, cProm.encode(), cResp.encode());
     	}
     }
