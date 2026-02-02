@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.json.JSONArray;
@@ -15,6 +16,7 @@ import com.neocoretechs.rosai.relatrix.RelatrixLSH;
 
 
 final class SystemPrompts {
+	private static boolean DEBUG = true;
     public static List<ChatFormat.Message> getSystemMessages(ChatFormat chatFormat) {
         return List.of(
         	system(chatFormat, "You are ROSCAR (Robot Operating System Context Augmented Retrieval). You run as a node in RosJavaLite, "
@@ -72,16 +74,15 @@ final class SystemPrompts {
     	//	ja.put(i,desc);
     	//}
     	//TreeManager.getInstance().set("parse", ja.toString());
-    	String response = ContentParser.extractProgressive(f);
+    	String prompt = ContentParser.extractProgressive(f);
     	Long ts = System.currentTimeMillis();
     	ChatFormat.Role role = ChatFormat.Role.USER;
-    	String prompt = "";
+    	String response = "Content from root node "+f.getName()+" parsed at "+LocalDateTime.now();
     	ChatFormat.Message cProm = new ChatFormat.Message(chatFormat, role, prompt);
     	ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
     	db.addInteraction(ts, role, cProm.encode(), cResp.encode());
-    	while ((response = ContentParser.extractProgressiveFile()) != null) {
-    		ts = System.currentTimeMillis();
-    		cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
+    	while ((prompt = ContentParser.extractProgressiveFile()) != null) {
+    		cProm = new ChatFormat.Message(chatFormat, role, prompt);
     		db.addInteraction(ts, role, cProm.encode(), cResp.encode());
     	}
     }
@@ -106,16 +107,15 @@ final class SystemPrompts {
     	//	ja.put(i,desc);
     	//}
     	//TreeManager.getInstance().set("parse", ja.toString());
-    	String response = ContentParser.extractProgressive(s);
-    	Long ts = System.currentTimeMillis();
+    	String prompt = ContentParser.extractProgressive(s);
+      	Long ts = System.currentTimeMillis();
     	ChatFormat.Role role = ChatFormat.Role.USER;
-    	String prompt = "";
+    	String response = "Content from root node "+s+" parsed at "+LocalDateTime.now();
     	ChatFormat.Message cProm = new ChatFormat.Message(chatFormat, role, prompt);
     	ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
     	db.addInteraction(ts, role, cProm.encode(), cResp.encode());
-    	while ((response = ContentParser.extractProgressiveUrl()) != null) {
-    		ts = System.currentTimeMillis();
-    		cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
+    	while ((prompt = ContentParser.extractProgressiveUrl()) != null) {
+    		cProm = new ChatFormat.Message(chatFormat, role, prompt);
     		db.addInteraction(ts, role, cProm.encode(), cResp.encode());
     	}
     }
