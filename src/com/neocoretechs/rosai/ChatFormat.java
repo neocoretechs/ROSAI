@@ -22,11 +22,12 @@ import org.apache.commons.logging.LogFactory;
 /**
  * Utility tailored for Llama 3 instruct prompt format.
  */
-public class ChatFormat {
+public class ChatFormat implements Serializable {
+	private static final long serialVersionUID = 1L;
 	private static final Log log = LogFactory.getLog(ChatFormat.class);
 	public static boolean DEBUG = true;
-	private Set<Integer> stopTokens;
-	private int bos;
+	private transient Set<Integer> stopTokens;
+	private transient int bos;
 	
 	public ChatFormat() {
 		try {
@@ -104,7 +105,7 @@ public class ChatFormat {
 	/**
 	 * Message record. 
 	 */
-	public record Message(ChatFormat chatFormat, ChatFormat.Role role, String content) {
+	public record Message(ChatFormat chatFormat, ChatFormat.Role role, String content) implements Serializable {
 		@Override
 		public String toString() {
 			return String.format("[%s] %s", role, content);
