@@ -30,6 +30,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -95,8 +96,10 @@ public class ModelRunner extends AbstractNodeMain {
 	public static final String ASSIST_PROMPT = "/assist_prompt";
 	public static final String LLM = "/model";
 
-	CircularBlockingDeque<String> outgoingMessageQueue = new CircularBlockingDeque<>(64);
-	CircularBlockingDeque<ChatFormat.Message> incomingMessageQueue = new CircularBlockingDeque<>(128);
+	public static int outgoingMessageQueueLength = 64;
+	public static int incomingMessageQueueLength = 128;
+	CircularBlockingDeque<String> outgoingMessageQueue = new CircularBlockingDeque<>(outgoingMessageQueueLength);
+	CircularBlockingDeque<ChatFormat.Message> incomingMessageQueue = new CircularBlockingDeque<>(incomingMessageQueueLength);
 
 	protected Object mutex = new Object();
 	protected static CountDownLatch dbLatch = new CountDownLatch(1); // barrier synch database init
@@ -121,41 +124,6 @@ public class ModelRunner extends AbstractNodeMain {
 	}
 	RangeTime ranges = new RangeTime();
 
-	/**
-	 * command /recalltime 
-	 * arg day time to end day time
-	 * @param query the command line with command times, start, end
-	 * @return String of Result instances from db that contain 2 elements of question/answer string in time range
-	 */
-	private static String parseTime(String... query) {
-		CompletableFuture<Stream> s;
-		String tq,tqe;
-		LocalDateTime localDateTime;
-		long millis,millise;
-		if(query == null)
-			return null;
-		if(query.length == 5) {
-			// day time to end day time
-			tq = String.format("%s %s", query[1], query[2]);
-			tqe = String.format("%s %s", query[3], query[4]);
-			localDateTime = LocalDateTime.parse(tq, DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss") );
-			millis = localDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-			localDateTime = LocalDateTime.parse(tqe, DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss") );
-			millise = localDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-			//s = dbClient.findSubStream(xid,'*','?','?',millis,millise,String.class,String.class);
-			StringBuilder sb = new StringBuilder();
-			/*
-    		try {
-    			s.get().forEach(e->{
-    				sb.append(((Result)e).get(0));
-    				sb.append(((Result)e).get(1));
-    			});
-    		} catch(InterruptedException | ExecutionException ie) {}
-			 */
-			return sb.toString();
-		}
-		return null;
-	}
 
 	@Override
 	public GraphName getDefaultNodeName() {
@@ -616,6 +584,24 @@ public class ModelRunner extends AbstractNodeMain {
 												return Optional.of("Exception parsing url content "+e.getMessage()+" at "+ LocalDateTime.now());
 											}
 											return Optional.of("Frontload database Ok at "+ LocalDateTime.now());
+										} else {
+											if(chatMessage.startsWith("dbdump://") ) {
+												try {
+													Iterator it = relatrixLSH.dump();
+													while(it.hasNext()) {
+														String res = relatrixLSH.dump(it, chatFormat);
+														while(outgoingMessageQueue.length() >= outgoingMessageQueueLength) {
+															System.out.println("Waiting for outgoing queue...");
+															Thread.sleep(100);
+														}
+														// push it right on output
+														outgoingMessageQueue.addLast(res);
+													}
+												} catch (ExecutionException | InterruptedException e) {
+													e.printStackTrace();
+												}
+												return Optional.empty();
+											}
 										}
 									}
 								}

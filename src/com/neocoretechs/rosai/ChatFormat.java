@@ -26,17 +26,22 @@ public class ChatFormat {
 	private static final Log log = LogFactory.getLog(ChatFormat.class);
 	public static boolean DEBUG = true;
 	private Set<Integer> stopTokens;
+	private int bos;
 	
 	public ChatFormat() {
 		try {
-			//endOfTurn = (int) Llama3.getTokenEOTMH.invokeExact();
-			//endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();
+			int endOfTurn = (int) Llama3.getTokenEOTMH.invokeExact();
+			int endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();
+			bos = (int) Llama3.getTokenBOSMH.invokeExact();
 			//System.out.println("eot="+endOfTurn+" eos="+endOfSentence);
-			List<Integer> it = DeviceManager.encode("<|eot_id|>");
-			int endOfText = it.get(0);
-			int endOfTurn = it.get(1);
-			//System.out.println("eot="+endOfTurn+" eoText="+endOfText+" int[0]="+it.getInt(0));
-			stopTokens = Set.of(endOfText, endOfTurn);
+			List<Integer> it = DeviceManager.encode("<|eot_id|>"); // llama3 specific
+			//int endOfText = it.get(0);
+			//int endOfTurn = it.get(1);
+			if(endOfTurn != it.get(0) && endOfTurn != it.get(1) && endOfSentence != it.get(0) && endOfSentence != it.get(1))
+				log.warn("CHAT TEMPLATE STOP TOKEN MISMATCH endOfTurn="+endOfTurn+" endOfSentence="+endOfSentence+" encode(<|eot_id|>int[0]="+it.get(0)+" int[1]="+it.get(1));
+			if(endOfTurn == endOfSentence)
+				++endOfSentence; // keep unique kludge
+			stopTokens = Set.of(endOfTurn, endOfSentence);
 		} catch (Throwable e) {
 			e.printStackTrace();
 		}
@@ -72,14 +77,30 @@ public class ChatFormat {
 			log.info("ChatFormat.extractDialogPrompt="+st.toString());
 		return st;
 	}
-
-	String stripFormatting(String input) {
+	/**
+	 * Strip Llama3 specific chat template formatting producing unformatted string
+	 * @param input The input STring
+	 * @return the unformatted string
+	 */
+	public String stripFormatting(String input) {
 		return input.replaceAll("<\\|.*?\\|>", "")
 				.replaceAll("\\*+", "")
 				.replaceAll("(?m)^USER:|AI:", "")
 				.trim();
 	}
-	
+	/**
+	 * Strip model specific chat template tokens from input
+	 * @param input Tokenized input
+	 * @return Format stripped tokenized output
+	 */
+	public List<Integer> stripFormatting(List<Integer> input) {
+		List<Integer> res = new ArrayList<Integer>();
+		for(Integer in: input) {
+			if(!stopTokens.contains(in) && in != bos)
+				res.add(in);
+		}
+		return res;
+	}
 	/**
 	 * Message record. 
 	 */
@@ -118,6 +139,7 @@ public class ChatFormat {
 			return role;
 		}
 	}
+	
 	private int[] encodeImpl(Collection<? extends Integer> intc) {
 		return intc.stream().mapToInt(i -> i).toArray();
 	}
@@ -209,12 +231,20 @@ public class ChatFormat {
 	private static String replaceControlCharacters(String str) {
 		return replaceControlCharacters(str.codePoints().toArray());
 	}
-
-	List<Integer> encodeAsList(String text) {
+	/**
+	 * Apply DeviceManager.encode on input text rendering tokenized list
+	 * @param text The input String
+	 * @return The List of tokenized Integers
+	 */
+	public List<Integer> encodeAsList(String text) {
 		return DeviceManager.encode(text);
 	}
-
-	Collection<? extends Integer> encodeAsCollection(String text) {
+	/**
+	 * Apply DeviceManager.encode on input text rendering tokenized Collection
+	 * @param text The input String
+	 * @return The Collection of tokenized Integer class or subclass
+	 */
+	public Collection<? extends Integer> encodeAsCollection(String text) {
 		return encodeAsList(text);
 	}
 	
