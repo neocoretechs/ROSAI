@@ -219,8 +219,13 @@ public class ModelRunner extends AbstractNodeMain {
 				if(response.isPresent() && response.get().length() > 0) {
 					if(DEBUG)
 						log.info("***Queueing from system preamble:"+response.get());
+					StringBuilder sb = new StringBuilder();
+					for(ChatFormat.Message s: prompts) {
+						sb.append(s.content());
+						sb.append("\r\n");
+					}
 					ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
-					relatrixLSH.addInteraction(System.currentTimeMillis(), ChatFormat.Role.SYSTEM, promptTokens, responseMessage.encode());
+					relatrixLSH.addInteraction(chatFormat, System.currentTimeMillis(), ChatFormat.Role.SYSTEM, sb.toString(), responseMessage.content());
 					outgoingMessageQueue.addLast(response.get());
 				}
 				// See if we preload DB with interactions
@@ -382,7 +387,7 @@ public class ModelRunner extends AbstractNodeMain {
 						if(DEBUG)
 							log.info("***Queueing from role:"+chatMessage.role()+" message:"+response.get());
 						ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
-						relatrixLSH.addInteraction(System.currentTimeMillis(), chatMessage.role(), chatMessage.encode(), responseMessage.encode());
+						relatrixLSH.addInteraction(chatFormat, System.currentTimeMillis(), chatMessage.role(), chatMessage.content(), responseMessage.content());
 						outgoingMessageQueue.addLast(response.get());
 					}
 					//try(Timer _ = Timer.log("reset context")) {

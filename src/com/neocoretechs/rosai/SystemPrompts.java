@@ -51,7 +51,7 @@ final class SystemPrompts {
     			String response = parts[3].trim();
     			ChatFormat.Message cProm = new ChatFormat.Message(chatFormat, role, prompt);
     			ChatFormat.Message cResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response);
-    			db.addInteraction(ts, role, cProm.encode(), cResp.encode());
+    			db.addInteraction(chatFormat, ts, role, cProm.content(), cResp.content());
     		}
     	}
     }
@@ -82,7 +82,7 @@ final class SystemPrompts {
         );
         ChatFormat.Message sysMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.SYSTEM, systemText);
         ChatFormat.Message sysResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT,"{}");
-        db.addInteraction(baseTs + (seq++), ChatFormat.Role.SYSTEM, sysMsg.encode(), sysResp.encode());
+        db.addInteraction(chatFormat, baseTs + (seq++), ChatFormat.Role.SYSTEM, sysMsg.content(), sysResp.content());
         // 2) First call: build stack and get initial top-level context (if your parser uses it)
         String topPrompt = ContentParser.extractProgressive(f); // builds stack and returns first chunk or context
         if (topPrompt != null && !topPrompt.isBlank()) {
@@ -100,7 +100,7 @@ final class SystemPrompts {
                     "TIMESTAMP: " + Instant.ofEpochMilli(ts).toString()
                 );
                 ChatFormat.Message assistantMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-                db.addInteraction(ts, ChatFormat.Role.USER, userMsg.encode(), assistantMsg.encode());
+                db.addInteraction(chatFormat, ts, ChatFormat.Role.USER, userMsg.content(), assistantMsg.content());
         }
         // 3) Repeatedly pop stack and store chunks until done
         String prompt;
@@ -120,7 +120,7 @@ final class SystemPrompts {
                 "TIMESTAMP: " + Instant.ofEpochMilli(tsContent).toString()
             );
             ChatFormat.Message assistantAck = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-            db.addInteraction(tsContent, ChatFormat.Role.USER, userContentMsg.encode(), assistantAck.encode());
+            db.addInteraction(chatFormat, tsContent, ChatFormat.Role.USER, userContentMsg.content(), assistantAck.content());
         }
     }
     /**
@@ -149,7 +149,7 @@ final class SystemPrompts {
         );
         ChatFormat.Message sysMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.SYSTEM, systemText);
         ChatFormat.Message sysResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT,"{}");
-        db.addInteraction(baseTs + (seq++), ChatFormat.Role.SYSTEM, sysMsg.encode(), sysResp.encode());
+        db.addInteraction(chatFormat, baseTs + (seq++), ChatFormat.Role.SYSTEM, sysMsg.content(), sysResp.content());
         // 2) First call: build stack and get initial top-level context (if your parser uses it)
         String topPrompt = ContentParser.extractProgressive(url); // builds stack and returns first chunk or context
         if (topPrompt != null && !topPrompt.isBlank()) {
@@ -167,7 +167,7 @@ final class SystemPrompts {
                     "TIMESTAMP: " + Instant.ofEpochMilli(ts).toString()
                 );
                 ChatFormat.Message assistantMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-                db.addInteraction(ts, ChatFormat.Role.ASSISTANT, userMsg.encode(), assistantMsg.encode());
+                db.addInteraction(chatFormat, ts, ChatFormat.Role.ASSISTANT, userMsg.content(), assistantMsg.content());
         }
         // 3) Repeatedly pop stack and store chunks until done
         String prompt;
@@ -187,7 +187,7 @@ final class SystemPrompts {
                 "TIMESTAMP: " + Instant.ofEpochMilli(tsContent).toString()
             );
             ChatFormat.Message assistantAck = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-            db.addInteraction(tsContent, ChatFormat.Role.ASSISTANT, userContentMsg.encode(), assistantAck.encode());
+            db.addInteraction(chatFormat, tsContent, ChatFormat.Role.ASSISTANT, userContentMsg.content(), assistantAck.content());
         }
     }
     /** Helper: build a simple headered content string (human-readable, avoids JSON) */

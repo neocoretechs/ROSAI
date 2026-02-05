@@ -270,18 +270,19 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	}
 	/**
 	 * Add the user/assistant interaction. Generates either commit or rollback on duplicate key.
+	 * @param chatFormat 
 	 * @param ts the timestamp
 	 * @param initiator the initiator of the interaction; either USER or SYSTEM
-	 * @param userMessage tokenized initiator message
-	 * @param responseTokens tokenized response
+	 * @param invocation
+	 * @param response response
 	 */
-	public void addInteraction(Long ts, ChatFormat.Role initiator, List<Integer> userMessage, List<Integer> responseTokens) {
+	public void addInteraction(ChatFormat chatFormat, Long ts, ChatFormat.Role initiator, String invocation, String response) {
 		TimestampRole tr_assistant = new TimestampRole(ts, ChatFormat.Role.ASSISTANT);
 		TimestampRole tr_user = new TimestampRole(ts, initiator);
 		//try(Timer _ = Timer.log("addInteraction: SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
 			try {
-				add(tr_user, userMessage);
-				add(tr_assistant, responseTokens);
+				add(chatFormat, tr_user, invocation);
+				add(chatFormat, tr_assistant, response);
 			} catch (IllegalAccessException | ClassNotFoundException | IOException | InterruptedException | ExecutionException e) {
 				log.error(e);
 				dbClient.rollback(xid);
@@ -293,8 +294,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	/**
 	 * Add a vector to the index. Create a UUID and store the vector in a K/V datastore, use the UUID to
 	 * reference the vector in the Relatrix relationship.
+	 * @param chatFormat 
 	 * @param timestampRole The map of the morphism to store LSH->TimestampRole->NoIndex key contains timestamp and role
-	 * @param vector the list of tokens
+	 * @param invocation the list of tokens
 	 * @throws DuplicateKeyException attempt to insert duplicate combined hash.timestampRole key
 	 * @throws IOException asynchronous database client exception
 	 * @throws ClassNotFoundException asynchronous database client exception
@@ -302,9 +304,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws ExecutionException asynchronous database client exception
 	 * @throws InterruptedException asynchronous database client exception
 	 */
-	public void add(TimestampRole timestampRole, List<Integer> vector) throws IllegalAccessException, ClassNotFoundException, IOException, InterruptedException, ExecutionException {
-		FloatTensor fvec = normalize(vector);
-		NoIndex noIndex = NoIndex.create(vector);
+	public void add(ChatFormat chatFormat, TimestampRole timestampRole, String invocation) throws IllegalAccessException, ClassNotFoundException, IOException, InterruptedException, ExecutionException {
+		FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(invocation)));
+		NoIndex noIndex = NoIndex.create(invocation);
 		for(int i = 0; i < hashTable.size(); i++) {
 			Integer combinedHash = hash(hashTable.get(i), fvec);
 			CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, timestampRole, noIndex);
