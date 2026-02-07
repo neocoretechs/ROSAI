@@ -167,7 +167,7 @@ final class SystemPrompts {
                     "TIMESTAMP: " + Instant.ofEpochMilli(ts).toString()
                 );
                 ChatFormat.Message assistantMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-                db.addInteraction(chatFormat, ts, ChatFormat.Role.ASSISTANT, userMsg, assistantMsg);
+                db.addInteraction(chatFormat, ts, ChatFormat.Role.USER, userMsg, assistantMsg);
         }
         // 3) Repeatedly pop stack and store chunks until done
         String prompt;
@@ -187,7 +187,7 @@ final class SystemPrompts {
                 "TIMESTAMP: " + Instant.ofEpochMilli(tsContent).toString()
             );
             ChatFormat.Message assistantAck = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-            db.addInteraction(chatFormat, tsContent, ChatFormat.Role.ASSISTANT, userContentMsg, assistantAck);
+            db.addInteraction(chatFormat, tsContent, ChatFormat.Role.USER, userContentMsg, assistantAck);
         }
     }
     /** Helper: build a simple headered content string (human-readable, avoids JSON) */
