@@ -441,19 +441,22 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				// then if found, perform the insert and modify the insertList after each insert
 				for(int insertListPos = 0; insertListPos < insertList.size(); insertListPos++) {
 					int nearestPos = insertList.get(insertListPos);
-					boolean nearestInsertBefore = insertAfter.get(insertListPos);
+					boolean nearestInsertAfter = insertAfter.get(insertListPos);
 					Result nearestResult = (Result)nearest.get(nearestPos);
 					if(DEBUG)
-						log.info("findNearest nearestPos="+nearestPos+" nearestInsertBefore="+nearestInsertBefore+" nearestResult="+nearestResult);
+						log.info("findNearest nearestPos="+nearestPos+" nearestInsertAfter="+nearestInsertAfter+" nearestResult="+nearestResult);
 					TimestampRole ts = (TimestampRole) nearestResult.get(1);
 					// find the timestamp in the query result
+					boolean timestampMatch = false;
 					for(Result queryResult: timestampRoleResult) {
 						TimestampRole timestampQueryResult = (TimestampRole) queryResult.get(0);
+						if(DEBUG)
+							log.info("findNearest timestampQueryResult="+timestampQueryResult+" nearestResult ts="+ts);
 						if(timestampQueryResult.getTimestamp() == ts.getTimestamp()) {
 							// now we have insertList at insertListPos, and timestampQueryResult match so insert queryResult
 							// at insertListPos in nearest based on insertList and beforeAfter
-							if(nearestInsertBefore) {
-								// insert before, normal insert
+							if(!nearestInsertAfter) {
+								// insert before, normal insert, add one to nearestPos element and subsequent indices
 								nearest.add(nearestPos, queryResult);
 								if(DEBUG)
 									log.info("findNearest insert before to nearest at "+nearestPos+" queryResult:"+queryResult);
@@ -469,6 +472,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 							} else {
 								// insert after, in other words before next specified element
 								nearest.add(nearestPos+1, queryResult);
+								if(DEBUG)
+									log.info("findNearest insert after to nearest at "+nearestPos+" queryResult:"+queryResult);
 								// update the insert positions in nearest
 								for(int insertListCtr = 0; insertListCtr < insertList.size(); insertListCtr++) {
 									if(insertList.get(insertListCtr) > nearestPos) {
@@ -479,8 +484,11 @@ public final class RelatrixLSH implements Serializable, Comparable {
 									}
 								}
 							}
+							timestampMatch = true;
 						}
 					}
+					if(!timestampMatch)
+						log.info("findNearest >>> No matching timestamp for nearestResult:"+nearestResult);
 				}
 			}
 		}
