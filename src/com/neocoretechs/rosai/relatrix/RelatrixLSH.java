@@ -338,7 +338,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				// put most recent user query last
 				returns.add(promptFrame);
 				if(DEBUG)
-					log.info("findNearest Returning from empty index and timestamp query with original prompt");
+					log.info("findNearest early Returning from empty index and timestamp query with original prompt");
 				return returns;
 			}
 		}
@@ -348,6 +348,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// and theta similarity
 		// organize their indexes in a TreeMap in descending order of cosDist, index in Result
 		double[] thetasim = new double[nearest.size()];
+		@SuppressWarnings("unused")
 		int cnt = 0;
 		TreeMap<Double, Integer> tm = new TreeMap<Double, Integer>();
 		for(int i = 0; i < nearest.size(); i++) {
@@ -374,35 +375,35 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		List<Integer> valueList = nm.values().stream().collect(Collectors.toList());
 		// list of eventual insertion points into valueList
 		ArrayList<Integer> insertList = new ArrayList<Integer>();
-		ArrayList<Boolean> beforeAfter = new ArrayList<Boolean>();
+		ArrayList<Boolean> insertAfter = new ArrayList<Boolean>();
 		// walk over interactions
 		int listCtr = 0;
 		while(listCtr < valueList.size()) {
-			if(DEBUG)
-				log.debug("findNearest listCtr:"+listCtr+" of "+valueList.size());
 			TimestampRole tsRole = (TimestampRole) ((Result)nearest.get(valueList.get(listCtr))).get(1);
 			switch(tsRole.getRole()) {
 			case Role.SYSTEM:
 			case Role.USER:
-				if(listCtr+1 == valueList.size() || !(((TimestampRole)((Result)nearest.get(valueList.get(listCtr+1))).get(1))).getRole().equals(Role.ASSISTANT)) {
-					if(DEBUG)
-						log.debug("findNearest found Role USER getting valueList:"+listCtr+" of "+valueList.size());
+				if(listCtr+1 >= valueList.size() || !(((TimestampRole)((Result)nearest.get(valueList.get(listCtr+1))).get(1))).getRole().equals(Role.ASSISTANT)) {
 					insertList.add(listCtr);
-					beforeAfter.add(false); //insert after
+					insertAfter.add(true); //entry is USER, next is NOT ASSISTANT
+					if(DEBUG)
+						log.info("findNearest role USER insert after "+listCtr);
 					// now advance to next entry
-					++listCtr;
-					break;
-				}
-				// advance list by 2, since 'next' entry is valid response of 'ASSISTANT'
-				listCtr+=2;
+					++listCtr;	
+				} else
+					// advance list by 2, since 'next' entry is valid response of 'ASSISTANT'
+					listCtr+=2;
 				break;
 			case Role.ASSISTANT:
 				// role is assistant without previous USER or SYSTEM, otherwise we would have skipped this entry
 				insertList.add(listCtr);
-				beforeAfter.add(true); // insert before
+				insertAfter.add(false); // insert before because entry is ASSISTANT
+				if(DEBUG)
+					log.info("findNearest role ASSISTANT insert before "+listCtr);
 				++listCtr;
 				break;
 			default:
+				valueList.remove(listCtr);
 				log.error("Unknown role encountered");
 				break;
 			}
@@ -422,6 +423,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				tsr.setRole(Role.USER);
 			else
 				tsr.setRole(Role.ASSISTANT);
+			if(DEBUG)
+				log.info("findNearest setting timestampRoleQuery "+tsr+" for nearest "+res);
 			timestampRoleQuery.add(tsr);
 		}
 		if(DEBUG)
@@ -438,38 +441,42 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				// then if found, perform the insert and modify the insertList after each insert
 				for(int insertListPos = 0; insertListPos < insertList.size(); insertListPos++) {
 					int nearestPos = insertList.get(insertListPos);
-					boolean nearestBeforeAfter = beforeAfter.get(insertListPos);
-					if(DEBUG)
-						log.debug("findNearest insertion target position from nearest: "+nearestPos+" beforeAfter:"+nearestBeforeAfter);
+					boolean nearestInsertBefore = insertAfter.get(insertListPos);
 					Result nearestResult = (Result)nearest.get(nearestPos);
 					if(DEBUG)
-						log.debug("findNearest insertion target Result from nearest: "+nearestResult);
+						log.info("findNearest nearestPos="+nearestPos+" nearestInsertBefore="+nearestInsertBefore+" nearestResult="+nearestResult);
 					TimestampRole ts = (TimestampRole) nearestResult.get(1);
 					// find the timestamp in the query result
 					for(Result queryResult: timestampRoleResult) {
 						TimestampRole timestampQueryResult = (TimestampRole) queryResult.get(0);
 						if(timestampQueryResult.getTimestamp() == ts.getTimestamp()) {
-							if(DEBUG)
-								log.debug("findNearest query result timestamp match:"+queryResult);
 							// now we have insertList at insertListPos, and timestampQueryResult match so insert queryResult
 							// at insertListPos in nearest based on insertList and beforeAfter
-							if(nearestBeforeAfter) {
+							if(nearestInsertBefore) {
 								// insert before, normal insert
 								nearest.add(nearestPos, queryResult);
+								if(DEBUG)
+									log.info("findNearest insert before to nearest at "+nearestPos+" queryResult:"+queryResult);
 								// update the insert positions in nearest
 								for(int insertListCtr = 0; insertListCtr < insertList.size(); insertListCtr++) {
-									if(insertList.get(insertListCtr) >= nearestPos)
+									if(insertList.get(insertListCtr) >= nearestPos) {
 										// we inserted before, so all elements >= insert position have to be incremented
 										insertList.set(insertListCtr,insertList.get(insertListCtr)+1);
+										if(DEBUG)
+											log.info("findNearest insert before updating insertList at:"+insertListCtr+" to "+insertList.get(insertListCtr));
+									}	
 								}
 							} else {
-								// insert before next specified element
+								// insert after, in other words before next specified element
 								nearest.add(nearestPos+1, queryResult);
 								// update the insert positions in nearest
 								for(int insertListCtr = 0; insertListCtr < insertList.size(); insertListCtr++) {
-									if(insertList.get(insertListCtr) > nearestPos)
+									if(insertList.get(insertListCtr) > nearestPos) {
 										// we inserted after, so all elements > insert position have to be incremented
 										insertList.set(insertListCtr,insertList.get(insertListCtr)+1);
+										if(DEBUG)
+											log.info("findNearest insert after updating insertList at:"+insertListCtr+" to "+insertList.get(insertListCtr));
+									}
 								}
 							}
 						}
@@ -477,53 +484,44 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				}
 			}
 		}
-		if(DEBUG)
-			log.info("findNearest "+tm.values().size()+" context entries, current results:"+results.size()+" max:"+(maxTokens - (((float)maxTokens) * .3)));
-		Iterator<Result> it = nearest.iterator();
-		while(it.hasNext() && results.size() < (maxTokens - (((float)maxTokens) * .3))) {
-			Result result = it.next();
+		// calculate how much of nearest we can insert
+		int nearestEntries = 0;
+		int contentSize = 0;
+		for(; nearestEntries < nearest.size(); nearestEntries++) {
+			Result result = ((Result)nearest.get(nearestEntries));
 			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)result.get(result.length()-1)).getInstance();
-			addRetrievedMessage(message, results, chatFormat, returns);
+			contentSize += message.content().length();
+			if(contentSize >= (maxTokens - (((float)maxTokens) * .3)))
+				break;
+		}
+		if(nearestEntries+1 <= nearest.size())
+			nearestEntries = Math.round(((float)nearestEntries) / 2) * 2;
+		if(DEBUG)
+			log.info("findNearest "+tm.values().size()+" original context entries, current nearest="+nearest.size()+" content size="+contentSize+" max:"+(maxTokens - (((float)maxTokens) * .3))+" max possible nearest entries="+nearestEntries);
+		for(int i = 0; i < nearestEntries; i++ ) {
+			Result result = nearest.get(i);
+			returns.add((ChatFormat.Message)((NoIndex)result.get(result.length()-1)).getInstance());
 		}
 		// put most recent user query last
 		returns.add(promptFrame);
-		return returns;
-	}
-	/**
-	 * Add the retrieved Result of 0 - TimestampRole 1 - NoIndex ChatFormat.Message to returns list
-	 * @param result Result result set from retrieval
-	 * @param results tokenized results
-	 * @param chatFormat chatFormat instance
-	 * @param returns List of ChatFormat.Messge returns
-	 */
-	private void addRetrievedMessage(Message message, List<Integer> results, ChatFormat chatFormat, List<ChatFormat.Message> returns) {
-		List<Integer> restensor = message.encode();
-		append(chatFormat, results, restensor);
-		if(DEBUG)
-			log.info("addRetrievedMessage for NoIndex tokens="+results.size()+" restensor="+restensor.size());
-		// calculate running total
-		int totalLen = 0;
-		for(ChatFormat.Message messg : returns)
-			totalLen += messg.content().length();
-		if( (totalLen + restensor.size()) >= maxTokens) {
-			log.info("addRetrievedMessage: addition of retrieved result of length "+restensor.size()+" would exceed context length by "+(totalLen+restensor.size()-maxTokens));
-			return;
+		if(DEBUG) {
+			for(int i = 0; i < returns.size(); i++) {
+				log.info(i+".) "+returns.get(i));
+			}
 		}
-		returns.add(message);
+		return returns;
 	}
 
 	/**
 	 * Get the NoIndex vector for passed TimestampRole. Format agnostic. 
-	 * Goal is to pass NEXT INSTANCE of result set on to addRetrievedMessage and
-	 * all other parameters to this method.
-	 * @param results List of tokenized results - passed on
-	 * @param chatFormat chatFormat instance - passed on
-	 * @param returns running list of ChatFormat.message retrievals - passed on
+	 * @param chatFormat chatFormat instance
+	 * @param returns running list of ChatFormat.message retrievals
 	 * @param trr target TimestampRole - passed on after use in retrieval
 	 * @throws InterruptedException asynchronous db client exception
 	 * @throws ExecutionException asynchronous client/database exception
 	 */
-	private void getTimestampRole(List<Integer> results, ChatFormat chatFormat, List<ChatFormat.Message> returns, TimestampRole trr) throws InterruptedException, ExecutionException {
+	@SuppressWarnings("unused")
+	private void getTimestampRole(ChatFormat chatFormat, List<ChatFormat.Message> returns, TimestampRole trr) throws InterruptedException, ExecutionException {
 		if(DEBUG)
 			log.info("getTimestampRole for "+trr);
 		//CompletableFuture<Stream> cit = dbClient.findStream(xid, '*', trr, '?');
@@ -536,17 +534,18 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				log.info("getTimeStampRole result");
 			//addRetrievedMessage((Result)e, trr, results, returns, tokenizer);
 			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)((Result)it.next()).get(0)).getInstance();
-			addRetrievedMessage(message, results, chatFormat, returns);
+			returns.add(message);
 			//});
 		}
 	}
 	/**
-	 * Append token list to end of full list by checking for end of list and overwriting that if it exists at end of existing list.
-	 * retro to String Groff 2/4/26
-	 * @param results
+	 * Append token list to end of full list. If existing token list contains end_of_message, overwrite it and extend.
+	 * @param chatFormat
 	 * @param tokens
+	 * @param results
 	 */
-	private void append(ChatFormat chatFormat, List<Integer> results, List<Integer> tokens) {
+	@SuppressWarnings("unused")
+	private void appendTokens(ChatFormat chatFormat, List<Integer> tokens, List<Integer> results) {
 		if(chatFormat.getStopTokens().contains(results.get(results.size()-1))) {
 			results.addAll(results.size()-1, tokens);
 		} else {

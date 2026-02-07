@@ -363,13 +363,14 @@ public class ModelRunner extends AbstractNodeMain {
 					}
 					List<ChatFormat.Message> responses = null;
 					try {
+						// chatMessage appended to responses
 						responses = relatrixLSH.findNearest(chatFormat, chatMessage);
 					} catch (IllegalArgumentException | ClassNotFoundException | IllegalAccessException | IOException | InterruptedException | ExecutionException e) {
 						e.printStackTrace();
 						responses = new ArrayList<ChatFormat.Message>();
 					}
 					if(DEBUG) {
-						StringBuilder sb = new StringBuilder("Responses:\n");
+						StringBuilder sb = new StringBuilder("Response Messages from findNearest pre-ChatTemplate:\n");
 						for(int i = 0; i < responses.size(); i++) {
 							sb.append(i);
 							sb.append(".) ");
@@ -378,7 +379,7 @@ public class ModelRunner extends AbstractNodeMain {
 						}
 						log.info(sb.toString());
 					}
-					responses.add(chatMessage);
+					// encode list of messages into proper templated tokenized list, perform forward inference, return optional String response
 					Optional<String> response = processMessage(chatFormat, chatFormat.encodeDialogPrompt(true, responses));
 					if(response.isPresent() && response.get().trim().length() > 0) {
 						if(DEBUG)
