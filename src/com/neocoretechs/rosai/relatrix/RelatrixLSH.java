@@ -9,10 +9,13 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -206,6 +209,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		//try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
 			CompletableFuture<List> cres = dbClient.findSetParallel(xid, '*', query, '?');
 			res = cres.get();
+			//if(DEBUG)
+			//	for(Result r: res)
+			//		System.out.println(((TimestampRole)(r.get(0))).getTimestamp()+" "+r);
 		//}
 		return res;
 	}
@@ -303,19 +309,19 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws IllegalArgumentException asychronous database client exception
 	 */
 	public List<ChatFormat.Message> findNearest(ChatFormat chatFormat, ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
-		List<Result> nearest = null;
+		List<Result> thetaNearestResults = null;
 		//List<Integer> results = (List<Integer>)promptFrame.encode();
 		//transition to String vector from tokenized Groff 2/4/26
-		List<Integer> results = chatFormat.stripFormatting(chatFormat.encodeAsList(promptFrame.content()));
+		List<Integer> promptFrameTokens = chatFormat.stripFormatting(chatFormat.encodeAsList(promptFrame.content()));
 		if(DEBUG)
-			log.info("findNearest User query has "+results.size()+" tokens from "+promptFrame);
-		List<ChatFormat.Message> returns = new ArrayList<ChatFormat.Message>();
-		FloatTensor fmessage = normalize(results);
-		nearest = queryParallel(fmessage);
+			log.info("findNearest User query has "+promptFrameTokens.size()+" tokens from "+promptFrame);
+		List<ChatFormat.Message> returnMessages = new ArrayList<ChatFormat.Message>();
+		FloatTensor fmessage = normalize(promptFrameTokens);
+		thetaNearestResults = queryParallel(fmessage);
 		if(DEBUG)
-			log.info("findNearest Retrieved "+nearest.size()+" entries from LSH index query.");
+			log.info("findNearest Retrieved "+thetaNearestResults.size()+" entries from LSH index query.");
 		// If we retrieved nothing from semantic query of initial message, try getting last timestamp
-		if(nearest.isEmpty()) {
+		if(thetaNearestResults.isEmpty()) {
 			//return results;
 			List<Result> resByTime = primeByTime();
 			// if we have a list of the timestamped results, get the index from them and
@@ -331,31 +337,27 @@ public final class RelatrixLSH implements Serializable, Comparable {
 						lshQuery.add(result.get(0));
 				}
 				// now query the matching LSH indexes we got from each timestamp
-				nearest = queryParallel(lshQuery);
+				thetaNearestResults = queryParallel(lshQuery);
 			}
 			// we could have come up index and timestamp empty
-			if(nearest == null || nearest.isEmpty()) {
+			if(thetaNearestResults == null || thetaNearestResults.isEmpty()) {
 				// put most recent user query last
-				returns.add(promptFrame);
+				returnMessages.add(promptFrame);
 				if(DEBUG)
 					log.info("findNearest early Returning from empty index and timestamp query with original prompt");
-				return returns;
+				return returnMessages;
 			}
 		}
-		// nearest has Result(s) from the last series of TimestampRole query, TimestampRole LSH index, and/or original message
-		// fmessage is our original message, mormalized as FloatTensor
+		// nearest has Result(s) from the last series of TimestampRole query, TimestampRole LSH index, and/or original message.<p>
+		// fmessage is our original message, mormalized as FloatTensor<p>
 		// organize our current Results and find similar relevant entries via cosine similarity
-		// and theta similarity
+		// and theta similarity.<p>
 		// organize their indexes in a TreeMap in descending order of cosDist, index in Result
-		double[] thetasim = new double[nearest.size()];
-		@SuppressWarnings("unused")
-		int cnt = 0;
-		TreeMap<Double, Integer> tm = new TreeMap<Double, Integer>();
-		for(int i = 0; i < nearest.size(); i++) {
-			Result result = nearest.get(i);
+		TreeMap<Double, Integer> thetaToNearestMap = new TreeMap<Double, Integer>();
+		for(int i = 0; i < thetaNearestResults.size(); i++) {
+			Result thetaNearestResult = thetaNearestResults.get(i);
 			// Original LSH at Result.get(0), TimestampRole at Result.get(1), message at Result.get(2)
-			NoIndex noIndex = (NoIndex) result.get(2);
-			//List<Integer> restensor = (List<Integer>)noIndex.getInstance();
+			NoIndex noIndex = (NoIndex) thetaNearestResult.get(2);
 			List<Integer> restensor = chatFormat.stripFormatting(chatFormat.encodeAsList(((ChatFormat.Message)noIndex.getInstance()).content()));
 			double cosDist;
 			FloatTensor cantensor = normalize(restensor);
@@ -364,30 +366,30 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			else
 				cosDist = cantensor.dot(0, fmessage, 0, fmessage.size());
 			cosDist = Math.acos(cosDist); // radians
-			thetasim[i] = cosDist;
 			if(DEBUG)
-				log.info("findNearest retrieved result set dialog index:"+i+" of "+nearest.size()+" theta="+cosDist+" .) "+result.get(0));//+" "+DeviceManager.decode(restensor));
-			tm.put(cosDist, i);
+				log.info("findNearest retrieved result set nearest size:"+thetaNearestResults.size()+" index "+i+" .) theta="+cosDist+" LSH="+thetaNearestResult.get(0)+"->"+thetaNearestResult.get(1));
+			thetaToNearestMap.put(cosDist, i);
 		}
 		// descending cos similarity order
-		NavigableMap<Double, Integer> nm = tm.descendingMap();
+		NavigableMap<Double, Integer> nm = thetaToNearestMap.descendingMap();
 		// flatten to list of descending cos order index into Result set of query TimestampRole->Message
 		List<Integer> valueList = nm.values().stream().collect(Collectors.toList());
 		// list of eventual insertion points into valueList
-		ArrayList<Integer> insertList = new ArrayList<Integer>();
-		ArrayList<Boolean> insertAfter = new ArrayList<Boolean>();
+		HashMap<Integer, TimestampRole> insertMap = new HashMap<Integer, TimestampRole>();
 		// walk over interactions
 		int listCtr = 0;
 		while(listCtr < valueList.size()) {
-			TimestampRole tsRole = (TimestampRole) ((Result)nearest.get(valueList.get(listCtr))).get(1);
+			TimestampRole tsRole = (TimestampRole) ((Result)thetaNearestResults.get(valueList.get(listCtr))).get(1);
 			switch(tsRole.getRole()) {
 			case Role.SYSTEM:
 			case Role.USER:
-				if(listCtr+1 >= valueList.size() || !(((TimestampRole)((Result)nearest.get(valueList.get(listCtr+1))).get(1))).getRole().equals(Role.ASSISTANT)) {
-					insertList.add(listCtr);
-					insertAfter.add(true); //entry is USER, next is NOT ASSISTANT
+				if(listCtr+1 >= valueList.size() || !(((TimestampRole)((Result)thetaNearestResults.get(valueList.get(listCtr+1))).get(1))).getRole().equals(Role.ASSISTANT)) {
+					TimestampRole tsr = new TimestampRole();
+					tsr.setTimestamp(tsRole.getTimestamp());
+					tsr.setRole(Role.ASSISTANT);
+					insertMap.put(valueList.get(listCtr), tsr); //nearest entry is USER, next is NOT ASSISTANT, so set this to look for ASSISTANT
 					if(DEBUG)
-						log.info("findNearest role USER insert after "+listCtr);
+						log.info("findNearest role USER insert after "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
 					// now advance to next entry
 					++listCtr;	
 				} else
@@ -396,130 +398,102 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				break;
 			case Role.ASSISTANT:
 				// role is assistant without previous USER or SYSTEM, otherwise we would have skipped this entry
-				insertList.add(listCtr);
-				insertAfter.add(false); // insert before because entry is ASSISTANT
+				TimestampRole tsr = new TimestampRole();
+				tsr.setTimestamp(tsRole.getTimestamp());
+				tsr.setRole(Role.USER);
+				insertMap.put(valueList.get(listCtr), tsr); //nearest entry is ASSISTANT, previous was NOT USER or SYSTEM, so set this to look for USER
 				if(DEBUG)
-					log.info("findNearest role ASSISTANT insert before "+listCtr);
+					log.info("findNearest role ASSISTANT insert before "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
 				++listCtr;
 				break;
 			default:
-				valueList.remove(listCtr);
+				thetaNearestResults.remove(valueList.get(listCtr));
 				log.error("Unknown role encountered");
 				break;
 			}
 		}
 		if(DEBUG)
-			log.info("findNearest insert list size:"+insertList.size());
-		// Now we have our insertList and our BeforeAfter list, process those performing another parallel query
-		// to try and resolve associated interaction elements that are missing and then insert those into our
-		// nearest list if found, if we cant locate a corresponding interaction element, then remove the entry
-		// we will create a TimestanpRole with a matching timestamp and the opposite role, the launch the query.
-		List<Object> timestampRoleQuery = new ArrayList<Object>();
-		for(Integer i : insertList) {
-			Result res = nearest.get(i);
-			TimestampRole tsr = new TimestampRole();
-			tsr.setTimestamp(((TimestampRole)res.get(1)).getTimestamp());
-			if(((TimestampRole)res.get(1)).getRole().equals(Role.ASSISTANT))
-				tsr.setRole(Role.USER);
-			else
-				tsr.setRole(Role.ASSISTANT);
-			if(DEBUG)
-				log.info("findNearest setting timestampRoleQuery "+tsr+" for nearest "+res);
-			timestampRoleQuery.add(tsr);
-		}
+			log.info("findNearest insert map size:"+insertMap.size());
+		// Now we have our insertMap so process those performing another parallel query
+		// to try and resolve associated interaction elements that are missing and then interpose those with our
+		// nearest list, if found. If we cant locate a corresponding interaction element, then skip the entry.
+		// Our map has a TimestampRole with a matching timestamp and the opposite role used to launch the query.
+		List<Object> timestampRoleQuery = new ArrayList<Object>(insertMap.values());
 		if(DEBUG)
 			log.info("findNearest timestampRoleQuery size:"+timestampRoleQuery.size());
+		List<Result> timestampRoleResult;
 		if(!timestampRoleQuery.isEmpty()) {
-			List<Result> timestampRoleResult = queryParallelMap(timestampRoleQuery);
-			// now we have a set of new Results with missing elements retrieved, insert those into our
-			// nearest table as 2 element Result sets interposed with our original 3 element result
-			// sets that the LSH index, we will have to differentiate as we extract the final messages
-			if(DEBUG)
-				log.info("findNearest parallel query timestampRoleResult size:"+timestampRoleResult.size());
-			if(!timestampRoleResult.isEmpty()) {
-				// iterate through insertList and match the timestamp with our results
-				// then if found, perform the insert and modify the insertList after each insert
-				for(int insertListPos = 0; insertListPos < insertList.size(); insertListPos++) {
-					int nearestPos = insertList.get(insertListPos);
-					boolean nearestInsertAfter = insertAfter.get(insertListPos);
-					Result nearestResult = (Result)nearest.get(nearestPos);
-					if(DEBUG)
-						log.info("findNearest nearestPos="+nearestPos+" nearestInsertAfter="+nearestInsertAfter+" nearestResult="+nearestResult);
-					TimestampRole ts = (TimestampRole) nearestResult.get(1);
-					// find the timestamp in the query result
-					boolean timestampMatch = false;
-					for(Result queryResult: timestampRoleResult) {
-						TimestampRole timestampQueryResult = (TimestampRole) queryResult.get(0);
-						if(DEBUG)
-							log.info("findNearest timestampQueryResult="+timestampQueryResult+" nearestResult ts="+ts);
-						if(timestampQueryResult.getTimestamp() == ts.getTimestamp()) {
-							// now we have insertList at insertListPos, and timestampQueryResult match so insert queryResult
-							// at insertListPos in nearest based on insertList and beforeAfter
-							if(!nearestInsertAfter) {
-								// insert before, normal insert, add one to nearestPos element and subsequent indices
-								nearest.add(nearestPos, queryResult);
-								if(DEBUG)
-									log.info("findNearest insert before to nearest at "+nearestPos+" queryResult:"+queryResult);
-								// update the insert positions in nearest
-								for(int insertListCtr = 0; insertListCtr < insertList.size(); insertListCtr++) {
-									if(insertList.get(insertListCtr) >= nearestPos) {
-										// we inserted before, so all elements >= insert position have to be incremented
-										insertList.set(insertListCtr,insertList.get(insertListCtr)+1);
-										if(DEBUG)
-											log.info("findNearest insert before updating insertList at:"+insertListCtr+" to "+insertList.get(insertListCtr));
-									}	
-								}
-							} else {
-								// insert after, in other words before next specified element
-								nearest.add(nearestPos+1, queryResult);
-								if(DEBUG)
-									log.info("findNearest insert after to nearest at "+nearestPos+" queryResult:"+queryResult);
-								// update the insert positions in nearest
-								for(int insertListCtr = 0; insertListCtr < insertList.size(); insertListCtr++) {
-									if(insertList.get(insertListCtr) > nearestPos) {
-										// we inserted after, so all elements > insert position have to be incremented
-										insertList.set(insertListCtr,insertList.get(insertListCtr)+1);
-										if(DEBUG)
-											log.info("findNearest insert after updating insertList at:"+insertListCtr+" to "+insertList.get(insertListCtr));
-									}
-								}
-							}
-							timestampMatch = true;
+			timestampRoleResult = queryParallelMap(timestampRoleQuery);
+			// calculate how much of nearest we can insert
+			int nearestEntries = 0;
+			int contentSize = 0;
+			for(; nearestEntries < thetaNearestResults.size(); nearestEntries++) {
+				Result thetaNearestResult = ((Result)thetaNearestResults.get(nearestEntries));
+				ChatFormat.Message message = (ChatFormat.Message)((NoIndex)thetaNearestResult.get(thetaNearestResult.length()-1)).getInstance();
+				contentSize += message.content().length();
+				TimestampRole timestampFromInsertMap = insertMap.get(nearestEntries); // one of the elements we searched for in queryParallelMap above
+				// If we are going to insert a subsequently retrieved matching entry, calculate its size and add to total
+				ChatFormat.Message insertMessage = null;
+				Optional<Result> r;
+				if(timestampFromInsertMap != null) {
+					r = matchTimestamp(timestampRoleResult, timestampFromInsertMap);
+					if(r.isPresent()) {
+						Result timeMatch = r.get();
+						insertMessage = (ChatFormat.Message)((NoIndex)timeMatch.get(timeMatch.length()-1)).getInstance();
+						contentSize += insertMessage.content().length();
+						if(contentSize >= (maxTokens - (((float)maxTokens) * .3)))
+							break;
+						// There is an insertion because timestampFromInsertMap came out of map not null, it matches a found entry
+						// because r matched the insert map timestamprole to a retrieved entry. We determined there is
+						// space in the context because we didnt break above. Now find out if it goes before or
+						// after the message we are inserting into final output. If timestampFromInsertMap is USER or SYSTEM it goes in now,
+						// if its ASSISTANT it goes in after message
+						if(timestampFromInsertMap.getRole().equals(ChatFormat.Role.ASSISTANT)) {
+							returnMessages.add(message);
+							returnMessages.add(insertMessage);
+						} else {
+							returnMessages.add(insertMessage);
+							returnMessages.add(message);
 						}
+						if(DEBUG)
+							log.info("findNearest "+thetaToNearestMap.values().size()+" original context entries, current nearest="+thetaNearestResults.size()+" content size="+contentSize+
+									" max:"+(maxTokens - (((float)maxTokens) * .3))+" max possible nearest entries="+nearestEntries+" # returns="+returnMessages.size());	
 					}
-					if(!timestampMatch)
-						log.info("findNearest >>> No matching timestamp for nearestResult:"+nearestResult);
-				}
+				}	
 			}
-		}
-		// calculate how much of nearest we can insert
-		int nearestEntries = 0;
-		int contentSize = 0;
-		for(; nearestEntries < nearest.size(); nearestEntries++) {
-			Result result = ((Result)nearest.get(nearestEntries));
-			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)result.get(result.length()-1)).getInstance();
-			contentSize += message.content().length();
-			if(contentSize >= (maxTokens - (((float)maxTokens) * .3)))
-				break;
-		}
-		if(nearestEntries+1 <= nearest.size())
-			nearestEntries = Math.round(((float)nearestEntries) / 2) * 2;
-		if(DEBUG)
-			log.info("findNearest "+tm.values().size()+" original context entries, current nearest="+nearest.size()+" content size="+contentSize+" max:"+(maxTokens - (((float)maxTokens) * .3))+" max possible nearest entries="+nearestEntries);
-		for(int i = 0; i < nearestEntries; i++ ) {
-			Result result = nearest.get(i);
-			returns.add((ChatFormat.Message)((NoIndex)result.get(result.length()-1)).getInstance());
 		}
 		// put most recent user query last
-		returns.add(promptFrame);
+		returnMessages.add(promptFrame);
 		if(DEBUG) {
-			for(int i = 0; i < returns.size(); i++) {
-				log.info(i+".) "+returns.get(i));
+			for(int i = 0; i < returnMessages.size(); i++) {
+				log.info(i+".) "+returnMessages.get(i));
 			}
 		}
-		return returns;
+		return returnMessages;
 	}
 
+	/**
+	 * Match a TimestampRole timestamp with a Result set List element 0 timestamp
+	 * @param source
+	 * @param target
+	 * @return the matching Result set with timetampRole and any additional retrieved elements
+	 */
+	private static Optional<Result> matchTimestamp(List<Result> source, TimestampRole target) {
+		Optional<Result> res = Optional.empty();
+		for(Result queryResult: source) {
+			TimestampRole timestampQueryResult = (TimestampRole) queryResult.get(0);
+			if(DEBUG)
+				log.info("findNearest.matchTimestamp timestampQueryResult="+timestampQueryResult+" target="+target+" queryResult="+queryResult);
+			//String stime1 = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampQueryResult.getTimestamp()), ZoneId.systemDefault()).toString();
+			//String stime2 = LocalDateTime.ofInstant(Instant.ofEpochMilli(target.getTimestamp()), ZoneId.systemDefault()).toString();
+			//if(stime1.equals(stime2)) {
+			if(timestampQueryResult.getTimestamp().longValue() == target.getTimestamp().longValue()) {
+				res = Optional.ofNullable(queryResult);
+				break;
+			}
+		}
+		return res;
+	}
 	/**
 	 * Get the NoIndex vector for passed TimestampRole. Format agnostic. 
 	 * @param chatFormat chatFormat instance
@@ -579,7 +553,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				CompletableFuture<Iterator> cres = dbClient.findSet(xid, '?', lastTime, '*');
 				Iterator<?> it = cres.get();
 				while(it.hasNext()) {
-					// should be LSH index, NoIndex Message
+					// LSH index in Result(0)
 					res.add((Result) it.next());
 				}
 			//}
