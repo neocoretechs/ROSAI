@@ -79,7 +79,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public AsynchRelatrixClientTransaction dbClient;
 	private TransactionId xid;
 	private int maxTokens;
-	private static final float CONTEXT_OVERHEAD_PCT = 0.4f;
+	private int maxAdjustedTokens; // tokenized vs character context count estimate
+	private static final float CONTEXT_OVERHEAD_PCT = 0.35f;
 	/**
 	 * Contains the mapping between a combination of a number of hashes (encoded
 	 * using an integer) and a list of possible nearest neighbors
@@ -106,6 +107,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		this.key = UUID.randomUUID();
 		this.hashTable = new ArrayList<CosineHash[]>();
 		this.maxTokens = maxTokens;
+		this.maxAdjustedTokens = (int) (maxTokens - (((float)maxTokens) * CONTEXT_OVERHEAD_PCT));
 		for(int i = 0; i < numberOfHashTables; i++) {
 			final CosineHash[] cHash = new CosineHash[numberOfHashes];
 			this.hashTable.add(cHash);
@@ -437,48 +439,77 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		List<Object> timestampRoleQuery = new ArrayList<Object>(insertMap.values());
 		if(DEBUG)
 			log.info("findNearest timestampRoleQuery size:"+timestampRoleQuery.size());
-		List<Result> timestampRoleResult;
+		List<Result> timestampRoleResult = null;
 		if(!timestampRoleQuery.isEmpty()) {
 			timestampRoleResult = queryParallelMap(timestampRoleQuery);
-			// calculate how much of nearest we can insert
-			int nearestEntries = 0;
-			int contentSize = 0;
-			for(; nearestEntries < thetaNearestResults.size(); nearestEntries++) {
-				Result thetaNearestResult = ((Result)thetaNearestResults.get(nearestEntries));
-				ChatFormat.Message message = (ChatFormat.Message)((NoIndex)thetaNearestResult.get(thetaNearestResult.length()-1)).getInstance();
-				contentSize += message.content().length();
-				TimestampRole timestampFromInsertMap = insertMap.get(nearestEntries); // one of the elements we searched for in queryParallelMap above
-				// If we are going to insert a subsequently retrieved matching entry, calculate its size and add to total
-				ChatFormat.Message insertMessage = null;
-				Optional<Result> r;
-				if(timestampFromInsertMap != null) {
-					r = matchTimestamp(timestampRoleResult, timestampFromInsertMap);
-					if(r.isPresent()) {
-						Result timeMatch = r.get();
-						insertMessage = (ChatFormat.Message)((NoIndex)timeMatch.get(timeMatch.length()-1)).getInstance();
-						contentSize += insertMessage.content().length();
-						if(contentSize >= (maxTokens - (((float)maxTokens) * CONTEXT_OVERHEAD_PCT)))
-							break;
-						// There is an insertion because timestampFromInsertMap came out of map not null, it matches a found entry
-						// because r matched the insert map timestamprole to a retrieved entry. We determined there is
-						// space in the context because we didnt break above. Now find out if it goes before or
-						// after the message we are inserting into final output. If timestampFromInsertMap is USER or SYSTEM it goes in now,
-						// if its ASSISTANT it goes in after message
-						if(timestampFromInsertMap.getRole().equals(ChatFormat.Role.ASSISTANT)) {
+		}
+		// walk the thetaNearestResults looking for matching insertMap elements
+		// insert messages into output results if context is not full
+		// walk over interactions with our insert map ready
+		int contentSize = promptFrame.content().length();
+		listCtr = 0;
+		loopExit: while(listCtr < valueList.size()) {
+			TimestampRole tsRole = (TimestampRole) ((Result)thetaNearestResults.get(valueList.get(listCtr))).get(1);
+			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)(thetaNearestResults.get(valueList.get(listCtr))).get(2)).getInstance();
+			contentSize += message.content().length();
+			switch(tsRole.getRole()) {
+			case Role.SYSTEM:
+			case Role.USER:
+				// do we have an insert?
+				TimestampRole insertMapValue = insertMap.get(valueList.get(listCtr));
+				if(insertMapValue != null) {
+					Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
+					if(insertMessage.isPresent()) {
+						contentSize += insertMessage.get().content().length();
+						if(contentSize < maxAdjustedTokens) {
 							returnMessages.add(message);
-							returnMessages.add(insertMessage);
-						} else {
-							returnMessages.add(insertMessage);
-							returnMessages.add(message);
-						}
-						if(DEBUG)
-							log.info("findNearest "+thetaToNearestMap.values().size()+" original context entries, current nearest="+thetaNearestResults.size()+" content size="+contentSize+
-									" max:"+(maxTokens - (((float)maxTokens) * CONTEXT_OVERHEAD_PCT))+" max possible nearest entries="+nearestEntries+" # returns="+returnMessages.size());	
+							returnMessages.add(insertMessage.get());
+						} else
+							break loopExit;
 					}
-				}	
+				} else {
+					// no insert, assume next entry is valid ASSISTANT
+					if(contentSize < maxAdjustedTokens) {
+						returnMessages.add(message);
+					} else
+						break loopExit;
+				}
+				// now advance to next entry
+				++listCtr;	 
+				break;
+			case Role.ASSISTANT:
+				// do we have an insert?
+				insertMapValue = insertMap.get(valueList.get(listCtr));
+				if(insertMapValue != null) {
+					Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
+					// If we didnt find a corresponding interaction, skip it as malformed
+					if(insertMessage.isPresent()) {
+						contentSize += insertMessage.get().content().length();
+						if(contentSize < maxAdjustedTokens) {
+							// note order of insert; USER/SYSTEM before this ASSISTANT
+							returnMessages.add(insertMessage.get());
+							returnMessages.add(message);
+						} else
+							break loopExit;
+					}
+				} else {
+					// no insert, assume next entry is valid USER or SYSTEM
+					if(contentSize < maxAdjustedTokens) {
+						returnMessages.add(message);
+					} else
+						break loopExit;
+				}
+				++listCtr;
+				break;
+			default:
+				log.error("Unknown role encountered");
+				break;
 			}
 		}
-		// put most recent user query last
+		if(DEBUG)
+			log.info("findNearest "+thetaToNearestMap.values().size()+" original context entries, current nearest="+thetaNearestResults.size()+" content size="+contentSize+
+									" max:"+maxAdjustedTokens+" # returns="+returnMessages.size());	
+		// put most recent user query last, we already accounted for context size at start of pipeline
 		returnMessages.add(promptFrame);
 		if(DEBUG) {
 			for(int i = 0; i < returnMessages.size(); i++) {
@@ -487,7 +518,25 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		}
 		return returnMessages;
 	}
-
+	/**
+	 * Match the timestap of the insertMap value element to the timestsamp of an element from the parallel query
+	 * by complementary role list. We just match timestamp because roles are complementary so we assume if timestamp
+	 * matches it the corresponding role we were missing from interaction list.
+	 * @param insertMapValue one of the TimestampRole elements we searched for and retrieved in queryParallelMap, assumed not null
+	 * @param timestampRoleResult the result list from queryParallelMap
+	 * @return the optional message that matched timestamp of insertMapValue in timestampRoleResult
+	 */
+	private static Optional<ChatFormat.Message> matchInsertMap(TimestampRole insertMapValue, List<Result> timestampRoleResult) {
+		// If we are going to insert a subsequently retrieved matching entry, calculate its size and add to total
+		ChatFormat.Message insertMessage = null;
+		Optional<Result> r;
+		r = matchTimestamp(timestampRoleResult, insertMapValue);
+		if(r.isPresent()) {
+			Result timeMatch = r.get();
+			insertMessage = (ChatFormat.Message)((NoIndex)timeMatch.get(timeMatch.length()-1)).getInstance();
+		}
+		return Optional.ofNullable(insertMessage);
+	}
 	/**
 	 * Match a TimestampRole timestamp with a Result set List element 0 timestamp
 	 * @param source

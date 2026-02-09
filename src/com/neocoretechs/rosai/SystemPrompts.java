@@ -69,16 +69,13 @@ final class SystemPrompts {
      * @throws Exception
      */
     public static void frontloadDbFromHtml(RelatrixLSH db, ChatFormat chatFormat, File f) throws Exception {
-        String batchId = "batch-" + UUID.randomUUID().toString();
         String rootSource = f.getAbsolutePath();
         long baseTs = System.currentTimeMillis();
         long seq = 0L;
         // 1) System message for the batch: short, authoritative constraints & provenance
         String systemText = String.join("\n",
-            "BATCH_ID: " + batchId,
             "SOURCE_ROOT: " + rootSource,
-            "INSTRUCTION: Summarize content text only; do not invent behavior.",
-            "OUTPUT_RULE: Include [source:content_id] after each summary sentence."
+            "INSTRUCTION: Summarize content text only; do not invent behavior."
         );
         ChatFormat.Message sysMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.SYSTEM, systemText);
         ChatFormat.Message sysResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT,"{}");
@@ -95,8 +92,6 @@ final class SystemPrompts {
                 String ack = String.join("\n",
                     "ACK_TYPE: parsed_content_stored",
                     "CONTENT_ID: " + contentId,
-                    "BATCH_ID: " + batchId,
-                    "STATUS: stored",
                     "TIMESTAMP: " + Instant.ofEpochMilli(ts).toString()
                 );
                 ChatFormat.Message assistantMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
@@ -115,8 +110,6 @@ final class SystemPrompts {
             String ack = String.join("\n",
                 "ACK_TYPE: parsed_content_stored",
                 "CONTENT_ID: " + contentId,
-                "BATCH_ID: " + batchId,
-                "STATUS: stored",
                 "TIMESTAMP: " + Instant.ofEpochMilli(tsContent).toString()
             );
             ChatFormat.Message assistantAck = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
@@ -142,10 +135,8 @@ final class SystemPrompts {
         long seq = 0L;
         // 1) System message for the batch: short, authoritative constraints & provenance
         String systemText = String.join("\n",
-            "BATCH_ID: " + batchId,
             "SOURCE_ROOT: " + rootSource,
-            "INSTRUCTION: Summarize content text only; do not invent behavior.",
-            "OUTPUT_RULE: Include [source:content_id] after each summary sentence."
+            "INSTRUCTION: Summarize content text only; do not invent behavior."
         );
         ChatFormat.Message sysMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.SYSTEM, systemText);
         ChatFormat.Message sysResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT,"{}");
@@ -162,8 +153,6 @@ final class SystemPrompts {
                 String ack = String.join("\n",
                     "ACK_TYPE: parsed_content_stored",
                     "CONTENT_ID: " + contentId,
-                    "BATCH_ID: " + batchId,
-                    "STATUS: stored",
                     "TIMESTAMP: " + Instant.ofEpochMilli(ts).toString()
                 );
                 ChatFormat.Message assistantMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
@@ -182,8 +171,6 @@ final class SystemPrompts {
             String ack = String.join("\n",
                 "ACK_TYPE: parsed_content_stored",
                 "CONTENT_ID: " + contentId,
-                "BATCH_ID: " + batchId,
-                "STATUS: stored",
                 "TIMESTAMP: " + Instant.ofEpochMilli(tsContent).toString()
             );
             ChatFormat.Message assistantAck = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
@@ -195,9 +182,9 @@ final class SystemPrompts {
         StringBuilder sb = new StringBuilder();
         sb.append("SOURCE: ").append(sourceUri).append("\n");
         sb.append("CONTENT_ID: ").append(contentId).append("\n");
-        sb.append("---BEGIN CONTENT---\n");
+        sb.append("-BEGIN CONTENT-\n");
         sb.append(contentText.trim()).append("\n");
-        sb.append("---END CONTENT---");
+        sb.append("-END CONTENT-");
         return sb.toString();
     }
 }

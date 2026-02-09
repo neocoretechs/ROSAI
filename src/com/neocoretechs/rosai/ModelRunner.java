@@ -458,7 +458,7 @@ public class ModelRunner extends AbstractNodeMain {
 				log.info("Returned Tokens="+tokNum);
 		//}
 		if(tokNum == -1) {
-			log.error("Context length exceeded, exiting");
+			log.info("Context length exceeded or other error, returning with empty token list..");
 			return Optional.empty();
 		}
 		List<Integer> retTokenList = retTokens.toList();
