@@ -32,11 +32,14 @@ import com.neocoretechs.relatrix.Result;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.key.NoIndex;
 import com.neocoretechs.rocksack.TransactionId;
-import com.neocoretechs.rosai.lsh.CosineHash;
 
-import com.neocoretechs.rosai.*;
-import com.neocoretechs.rosai.ChatFormat.Message;
+import com.neocoretechs.rosai.lsh.CosineHash;
+import com.neocoretechs.rosai.FloatTensor;
+import com.neocoretechs.rosai.Parallel;
+import com.neocoretechs.rosai.TimestampRole;
+import com.neocoretechs.rosai.ChatFormat;
 import com.neocoretechs.rosai.ChatFormat.Role;
+import com.neocoretechs.rosai.F32FloatTensor;
 /**
  * An {@link Index} contains one or more locality sensitive hash tables. These hash
  * tables contain the mapping between a combination of a number of hashes
@@ -76,7 +79,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public AsynchRelatrixClientTransaction dbClient;
 	private TransactionId xid;
 	private int maxTokens;
-
+	private static final float CONTEXT_OVERHEAD_PCT = 0.4f;
 	/**
 	 * Contains the mapping between a combination of a number of hashes (encoded
 	 * using an integer) and a list of possible nearest neighbors
@@ -295,9 +298,24 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		}
 	}
 	/**
-	 * Find the nearest candidates using cosine similarity. If none are found get the lset timestsamp
-	 * retrieve that vector, then get the other vectors with the LSH index and obtain
-	 * the most relevant.
+	 * Find the nearest candidates using theta angle similarity. This is the arc cosine of the
+	 * standard cosine similarity.<p> The pipe line is as follows:<br>
+	 * Tokenize prompt, normalize token vector, perform parallel query on LSH
+	 * indexes of normalized vector<br>
+	 * If no result sets come back in thetaNearestResults, get the latest timestamp, retrieve that LSH index
+	 * and perform a parallel query for those LSH indexes.<br>
+	 * If thetaNearestResults is still empty, theres nothing to work with, so load orignal prompt and return early.<br>
+	 * Build a map of thetaNearestResults that has Result(s) from the last series of TimestampRole query, 
+	 * TimestampRole LSH index, and/or original message.<br>
+	 * find similar relevant entries via cosine similarity and theta similarity in cosDist.<br>
+	 * Build a TreeMap in descending order of cosDist, index into thetaNearestResults<br>
+	 * flatten to list of descending order <br>
+	 * Walk the list of interactions and and create an insertMap of missing interaction elements.<br>
+	 * insertMap is indexes into thetaNearestResults with complimentary TimestampRole-Message<br>
+	 * Now we have our insertMap, so process those performing another parallel query to locate content of missing elements.<br>
+	 * Try and resolve associated interaction elements that are missing and then interpose those with our
+	 * nearest list, if found. If we cant locate a corresponding interaction element, then skip the entry.<br>
+	 * Our map has a TimestampRole with a matching timestamp and the opposite role used to launch the query.<br>
 	 * @param chatFormat chatFormat instance
 	 * @param promptFrame list of messages to populate starting with initial request
 	 * @return List of retrieved messages
@@ -310,8 +328,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	public List<ChatFormat.Message> findNearest(ChatFormat chatFormat, ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> thetaNearestResults = null;
-		//List<Integer> results = (List<Integer>)promptFrame.encode();
-		//transition to String vector from tokenized Groff 2/4/26
 		List<Integer> promptFrameTokens = chatFormat.stripFormatting(chatFormat.encodeAsList(promptFrame.content()));
 		if(DEBUG)
 			log.info("findNearest User query has "+promptFrameTokens.size()+" tokens from "+promptFrame);
@@ -338,21 +354,21 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				}
 				// now query the matching LSH indexes we got from each timestamp
 				thetaNearestResults = queryParallel(lshQuery);
-			}
-			// we could have come up index and timestamp empty
-			if(thetaNearestResults == null || thetaNearestResults.isEmpty()) {
-				// put most recent user query last
-				returnMessages.add(promptFrame);
-				if(DEBUG)
-					log.info("findNearest early Returning from empty index and timestamp query with original prompt");
-				return returnMessages;
+				// If thetaNearestResults is still empty, theres nothing to work with, so load original prompt and return early.
+				if(thetaNearestResults.isEmpty()) {
+					returnMessages.add(promptFrame);
+					if(DEBUG)
+						log.info("findNearest Early return with original prompt...");
+					return returnMessages;
+				}
 			}
 		}
-		// nearest has Result(s) from the last series of TimestampRole query, TimestampRole LSH index, and/or original message.<p>
+		// thetaNearestResults has Result(s) from the last series of TimestampRole query, 
+		// TimestampRole LSH index, and/or original message.<p>
 		// fmessage is our original message, mormalized as FloatTensor<p>
 		// organize our current Results and find similar relevant entries via cosine similarity
-		// and theta similarity.<p>
-		// organize their indexes in a TreeMap in descending order of cosDist, index in Result
+		// and theta similarity in cosDist.<p>
+		// Build a TreeMap in descending order of cosDist, index into thetaNearestResults.
 		TreeMap<Double, Integer> thetaToNearestMap = new TreeMap<Double, Integer>();
 		for(int i = 0; i < thetaNearestResults.size(); i++) {
 			Result thetaNearestResult = thetaNearestResults.get(i);
@@ -441,7 +457,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 						Result timeMatch = r.get();
 						insertMessage = (ChatFormat.Message)((NoIndex)timeMatch.get(timeMatch.length()-1)).getInstance();
 						contentSize += insertMessage.content().length();
-						if(contentSize >= (maxTokens - (((float)maxTokens) * .3)))
+						if(contentSize >= (maxTokens - (((float)maxTokens) * CONTEXT_OVERHEAD_PCT)))
 							break;
 						// There is an insertion because timestampFromInsertMap came out of map not null, it matches a found entry
 						// because r matched the insert map timestamprole to a retrieved entry. We determined there is
@@ -457,7 +473,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 						}
 						if(DEBUG)
 							log.info("findNearest "+thetaToNearestMap.values().size()+" original context entries, current nearest="+thetaNearestResults.size()+" content size="+contentSize+
-									" max:"+(maxTokens - (((float)maxTokens) * .3))+" max possible nearest entries="+nearestEntries+" # returns="+returnMessages.size());	
+									" max:"+(maxTokens - (((float)maxTokens) * CONTEXT_OVERHEAD_PCT))+" max possible nearest entries="+nearestEntries+" # returns="+returnMessages.size());	
 					}
 				}	
 			}
