@@ -1,11 +1,8 @@
 package com.neocoretechs.rosai;
 
 import java.io.Serializable;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
@@ -28,21 +25,66 @@ public class ChatFormat implements Serializable {
 	public static boolean DEBUG = true;
 	private transient Set<Integer> stopTokens;
 	private transient int bos;
+	public static String endOfTurn = "<|eot_id|>"; // llama3 specific, overwritten in ctor
+	
+	/* This is the Gemma Role enum:
+	public enum Role {
+		SYSTEM("model"),
+		USER("user"),
+		ASSISTANT("model");
+		private final String role;
+		Role(String role) {
+			this.role = role;
+		}
+		public String getRole() {
+			return role;
+		}
+		@Override
+		public String toString() {
+			return role;
+		}
+	}
+	*/
+	
+	// This is the Llama, Mistral etc Role enum
+	public enum Role {
+		SYSTEM("system"),
+		USER("user"),
+		ASSISTANT("assistant");
+		private final String role;
+		Role(String role) {
+			this.role = role;
+		}
+		public String getRole() {
+			return role;
+		}
+		@Override
+		public String toString() {
+			return role;
+		}
+	}
 	
 	public ChatFormat() {
 		try {
-			int endOfTurn = (int) Llama3.getTokenEOTMH.invokeExact();
-			int endOfSentence = (int) Llama3.getTokenEOSMH.invokeExact();
+			int endOfTurnTok = (int) Llama3.getTokenEOTMH.invokeExact();
+			int endOfSentenceTok = (int) Llama3.getTokenEOSMH.invokeExact();
 			bos = (int) Llama3.getTokenBOSMH.invokeExact();
 			//System.out.println("eot="+endOfTurn+" eos="+endOfSentence);
-			List<Integer> it = DeviceManager.encode("<|eot_id|>"); // llama3 specific
+			IntTensor ieot = new IntTensor(new int[] {endOfTurnTok});
+			StringTensor out = new StringTensor();
+			out.allocate(new byte[Llama3.options.getMaxTokens()]);
+			int siz = DeviceManager.tokenToString(ieot, 1, out);
+			endOfTurn = out.toString();
+			//System.out.println("endOfTurn siz="+siz+" out="+out.toString()+" out len ="+out.toString().length());
+			List<Integer> it = DeviceManager.encode(endOfTurn); 
 			//int endOfText = it.get(0);
 			//int endOfTurn = it.get(1);
-			if(endOfTurn != it.get(0) && endOfTurn != it.get(1) && endOfSentence != it.get(0) && endOfSentence != it.get(1))
-				log.warn("CHAT TEMPLATE STOP TOKEN MISMATCH endOfTurn="+endOfTurn+" endOfSentence="+endOfSentence+" encode(<|eot_id|>int[0]="+it.get(0)+" int[1]="+it.get(1));
-			if(endOfTurn == endOfSentence)
-				++endOfSentence; // keep unique kludge
-			stopTokens = Set.of(endOfTurn, endOfSentence);
+			// sanity check
+			if(endOfTurnTok != it.get(0) && endOfTurnTok != it.get(1) && endOfSentenceTok != it.get(0) && endOfSentenceTok != it.get(1))
+				log.warn("CHAT TEMPLATE STOP TOKEN MISMATCH endOfTurn="+endOfTurnTok+" endOfSentence="+endOfSentenceTok+" encode(<|eot_id|>),int[0]="+it.get(0)+" int[1]="+it.get(1));
+			if(endOfTurnTok == endOfSentenceTok)
+				++endOfSentenceTok; // keep unique kludge
+			stopTokens = Set.of(endOfTurnTok, endOfSentenceTok);
 		} catch (Throwable e) {
 			e.printStackTrace();
 		}
@@ -121,23 +163,6 @@ public class ChatFormat implements Serializable {
 			ArrayList<Message> tr = new ArrayList<Message>(1);
 			tr.add(this);
 			return MessageTensor.applyChatTemplate(tr, appendAssistant);
-		}
-	}
-
-	public enum Role {
-		SYSTEM("system"),
-		USER("user"),
-		ASSISTANT("assistant");
-		private final String role;
-		Role(String role) {
-			this.role = role;
-		}
-		public String getRole() {
-			return role;
-		}
-		@Override
-		public String toString() {
-			return role;
 		}
 	}
 	

@@ -1,7 +1,7 @@
 package com.neocoretechs.rosai;
 
 import java.lang.foreign.MemorySegment;
-import java.util.Arrays;
+
 import java.util.List;
 
 import org.apache.commons.logging.Log;
@@ -59,7 +59,8 @@ public final class DeviceManager {
 			throw new RuntimeException(e);
 		}	
 	}
-	private static int tokenToString(IntTensor inTokens, int size, StringTensor retStrings) {
+	
+	public static int tokenToString(IntTensor inTokens, int size, StringTensor retStrings) {
 		MemorySegment hostSeg = inTokens.getSegment();
 		long addr = hostSeg.address();
 		MemorySegment tokSegment = retStrings.getSegment();
@@ -79,13 +80,9 @@ public final class DeviceManager {
 	}
 	/**
 	 * Decode a String from a list of input tokens using tokenToString call to model.
-	 * This method is the only one that might constrain models to working entirely properly with Llama-based
-	 * models. Based on stopTokens from {@link ChatFormat} we wont be able to properly strip out formatting
-	 * to return an entirely decoded String from the list of input tokens. Side effects are not fully known but
-	 * retrieval from LSH indexing might be affected. A more extensive list of stop tokens per model and eot_id
-	 * per model, perhaps via enhancement in ChatFormat might be required to properly utilize other models fully.
+	 * Based on stopTokens and endOfTurn fields from {@link ChatFormat}
 	 * @param it The List of integer input tokens
-	 * @return the resultant STring.
+	 * @return the resultant String.
 	 */
 	public static String decode(ChatFormat chatFormat, List<Integer> it) {
 		//System.out.println(Arrays.toString(it.toArray()));
@@ -94,6 +91,8 @@ public final class DeviceManager {
 			if(chatFormat.getStopTokens().contains(it.get(i)))
 				break;
 		}
+		if(i == -1)
+			i = it.size()-1;
 		IntTensor itt = new IntTensor(it.subList(0, i));
 		if(DEBUG)
 			log.info("decode input len="+i);
@@ -102,9 +101,9 @@ public final class DeviceManager {
 		String retString = retStringTensor.toString();
 		if(DEBUG)
 			log.info("decode strLen="+retString.length());
-		strLen = retString.lastIndexOf("<|eot_id|>");
+		strLen = retString.lastIndexOf(ChatFormat.endOfTurn);
 		if(strLen != -1)
-			retString = retString.substring(0,strLen+10);
+			retString = retString.substring(0,strLen+ChatFormat.endOfTurn.length());
 		if(DEBUG)
 			log.info("decode strLen subsring="+retString.length());
 		return retString;
