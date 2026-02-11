@@ -451,7 +451,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		loopExit: while(listCtr < valueList.size()) {
 			TimestampRole tsRole = (TimestampRole) ((Result)thetaNearestResults.get(valueList.get(listCtr))).get(1);
 			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)(thetaNearestResults.get(valueList.get(listCtr))).get(2)).getInstance();
-			contentSize += message.content().length();
 			switch(tsRole.getRole()) {
 			case Role.SYSTEM:
 			case Role.USER:
@@ -459,7 +458,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				TimestampRole insertMapValue = insertMap.get(valueList.get(listCtr));
 				if(insertMapValue != null) {
 					Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
-					if(insertMessage.isPresent()) {
+					if(insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
+						contentSize += message.content().length();
 						contentSize += insertMessage.get().content().length();
 						if(contentSize < maxAdjustedTokens) {
 							returnMessages.add(message);
@@ -468,7 +468,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 							break loopExit;
 					}
 				} else {
+					if(returnMessages.contains(message)) {
+						// assume this entry and next are redundant
+						listCtr+=2;
+						break;
+					}
 					// no insert, assume next entry is valid ASSISTANT
+					contentSize += message.content().length();
 					if(contentSize < maxAdjustedTokens) {
 						returnMessages.add(message);
 					} else
@@ -483,7 +489,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				if(insertMapValue != null) {
 					Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
 					// If we didnt find a corresponding interaction, skip it as malformed
-					if(insertMessage.isPresent()) {
+					if(insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
+						contentSize += message.content().length();
 						contentSize += insertMessage.get().content().length();
 						if(contentSize < maxAdjustedTokens) {
 							// note order of insert; USER/SYSTEM before this ASSISTANT
@@ -494,6 +501,12 @@ public final class RelatrixLSH implements Serializable, Comparable {
 					}
 				} else {
 					// no insert, assume next entry is valid USER or SYSTEM
+					if(returnMessages.contains(message)) {
+						// assume this entry and next are redundant
+						listCtr+=2;
+						break;
+					}
+					contentSize += message.content().length();
 					if(contentSize < maxAdjustedTokens) {
 						returnMessages.add(message);
 					} else
