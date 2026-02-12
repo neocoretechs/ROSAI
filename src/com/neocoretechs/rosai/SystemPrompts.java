@@ -79,7 +79,7 @@ final class SystemPrompts {
         );
         ChatFormat.Message sysMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.SYSTEM, systemText);
         ChatFormat.Message sysResp = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT,"{}");
-        db.addInteraction(chatFormat, baseTs + (seq++), ChatFormat.Role.SYSTEM, sysMsg, sysResp);
+        seq += db.addInteraction(chatFormat, baseTs, ChatFormat.Role.SYSTEM, sysMsg, sysResp);
         // 2) First call: build stack and get initial top-level context (if your parser uses it)
         String topPrompt = ContentParser.extractProgressive(f); // builds stack and returns first chunk or context
         if (topPrompt != null && !topPrompt.isBlank()) {
@@ -87,7 +87,7 @@ final class SystemPrompts {
             String contentId = "c-" + UUID.nameUUIDFromBytes((rootSource + topPrompt).getBytes()).toString();
                 String headered = buildHeaderedContent(rootSource, contentId, topPrompt);
                 ChatFormat.Message userMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, headered);
-                long ts = baseTs + (seq++);
+                long ts = baseTs + seq;
                 // assistant ack: short structured confirmation
                 String ack = String.join("\n",
                     "ACK_TYPE: parsed_content_stored",
@@ -95,7 +95,7 @@ final class SystemPrompts {
                     "TIMESTAMP: " + Instant.ofEpochMilli(ts).toString()
                 );
                 ChatFormat.Message assistantMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-                db.addInteraction(chatFormat, ts, ChatFormat.Role.USER, userMsg, assistantMsg);
+                seq += db.addInteraction(chatFormat, ts, ChatFormat.Role.USER, userMsg, assistantMsg);
         }
         // 3) Repeatedly pop stack and store chunks until done
         String prompt;
@@ -105,7 +105,7 @@ final class SystemPrompts {
             // build a human-readable header + chunk body (avoid large JSON in the prompt)
             String headeredContent = buildHeaderedContent(rootSource, contentId, prompt);
             ChatFormat.Message userContentMsg = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, headeredContent);
-            long tsContent = baseTs + (seq++);
+            long tsContent = baseTs + seq;
             // assistant ack: short, structured, machine-friendly
             String ack = String.join("\n",
                 "ACK_TYPE: parsed_content_stored",
@@ -113,7 +113,7 @@ final class SystemPrompts {
                 "TIMESTAMP: " + Instant.ofEpochMilli(tsContent).toString()
             );
             ChatFormat.Message assistantAck = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, ack);
-            db.addInteraction(chatFormat, tsContent, ChatFormat.Role.USER, userContentMsg, assistantAck);
+            seq += db.addInteraction(chatFormat, tsContent, ChatFormat.Role.USER, userContentMsg, assistantAck);
         }
     }
     /**
@@ -129,7 +129,7 @@ final class SystemPrompts {
      * @throws Exception
      */
     public static void frontloadDbFromHtml(RelatrixLSH db, ChatFormat chatFormat, String url) throws Exception {
-        String batchId = "batch-" + UUID.randomUUID().toString();
+        //String batchId = "batch-" + UUID.randomUUID().toString();
         String rootSource = url;
         long baseTs = System.currentTimeMillis();
         long seq = 0L;

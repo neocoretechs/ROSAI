@@ -3,17 +3,15 @@ package com.neocoretechs.rosai.relatrix;
 import java.io.IOException;
 import java.io.Serializable;
 import java.lang.foreign.MemorySegment;
-import java.time.Instant;
+
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -28,6 +26,7 @@ import org.apache.commons.logging.LogFactory;
 
 import com.neocoretechs.relatrix.DuplicateKeyException;
 import com.neocoretechs.relatrix.Relation;
+import com.neocoretechs.relatrix.type.RelationList;
 import com.neocoretechs.relatrix.Result;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.key.NoIndex;
@@ -38,6 +37,7 @@ import com.neocoretechs.rosai.FloatTensor;
 import com.neocoretechs.rosai.Parallel;
 import com.neocoretechs.rosai.TimestampRole;
 import com.neocoretechs.rosai.ChatFormat;
+import com.neocoretechs.rosai.ChatFormat.Message;
 import com.neocoretechs.rosai.ChatFormat.Role;
 import com.neocoretechs.rosai.F32FloatTensor;
 /**
@@ -81,6 +81,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	private int maxTokens;
 	private int maxAdjustedTokens; // tokenized vs character context count estimate
 	private static final float CONTEXT_OVERHEAD_PCT = 0.35f;
+	private static final int MAX_DB_CONTENT_SIZE = 2000;
 	/**
 	 * Contains the mapping between a combination of a number of hashes (encoded
 	 * using an integer) and a list of possible nearest neighbors
@@ -261,20 +262,23 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @param initiator the initiator of the interaction; either USER or SYSTEM
 	 * @param invocation
 	 * @param response response
+	 * @return sum of timestamp offsets from base, add each entry inserted
 	 */
-	public void addInteraction(ChatFormat chatFormat, Long ts, ChatFormat.Role initiator, ChatFormat.Message invocation, ChatFormat.Message response) {
-		TimestampRole tr_assistant = new TimestampRole(ts, ChatFormat.Role.ASSISTANT);
+	public long addInteraction(ChatFormat chatFormat, Long ts, ChatFormat.Role initiator, ChatFormat.Message invocation, ChatFormat.Message response) {
+		long sumOffset;
 		TimestampRole tr_user = new TimestampRole(ts, initiator);
 		//try(Timer _ = Timer.log("addInteraction: SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
 			try {
-				add(chatFormat, tr_user, invocation);
-				add(chatFormat, tr_assistant, response);
+				sumOffset = add(chatFormat, tr_user, invocation);
+				TimestampRole tr_assistant = new TimestampRole(ts + sumOffset, ChatFormat.Role.ASSISTANT);
+				sumOffset += add(chatFormat, tr_assistant, response);
 			} catch (IllegalAccessException | ClassNotFoundException | IOException | InterruptedException | ExecutionException e) {
 				log.error(e);
 				dbClient.rollback(xid);
-				return;
+				return 0L;
 			}
 			dbClient.commit(xid); // Only after both store ops succeed
+			return sumOffset;
 		//}
 	}	
 	/**
@@ -283,6 +287,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @param chatFormat 
 	 * @param timestampRole The map of the morphism to store LSH->TimestampRole->NoIndex key contains timestamp and role
 	 * @param invocation the list of tokens
+	 * @return TODO
 	 * @throws DuplicateKeyException attempt to insert duplicate combined hash.timestampRole key
 	 * @throws IOException asynchronous database client exception
 	 * @throws ClassNotFoundException asynchronous database client exception
@@ -290,14 +295,80 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws ExecutionException asynchronous database client exception
 	 * @throws InterruptedException asynchronous database client exception
 	 */
-	public void add(ChatFormat chatFormat, TimestampRole timestampRole, ChatFormat.Message invocation) throws IllegalAccessException, ClassNotFoundException, IOException, InterruptedException, ExecutionException {
+	public long add(ChatFormat chatFormat, TimestampRole timestampRole, ChatFormat.Message invocation) throws IllegalAccessException, ClassNotFoundException, IOException, InterruptedException, ExecutionException {
 		FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(invocation.content())));
-		NoIndex noIndex = NoIndex.create(invocation);
+		long timeOffset = 0L;
 		for(int i = 0; i < hashTable.size(); i++) {
 			Integer combinedHash = hash(hashTable.get(i), fvec);
-			CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, timestampRole, noIndex);
-			res.get();
+			if(invocation.content().length() >= MAX_DB_CONTENT_SIZE) {
+				ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, timestampRole, invocation);
+				timeOffset = segmentedContent.size();
+				CompletableFuture<RelationList> res = dbClient.multiStore(xid, segmentedContent);
+				res.get();
+			} else {
+				timeOffset = 1L;
+				NoIndex noIndex = NoIndex.create(invocation);
+				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, timestampRole, noIndex);
+				res.get();
+			}
 		}
+		return timeOffset;
+	}
+	/**
+	 * Segment the content into chunks of monotonically increasing TimestampRole to allow more progressive increase of context size
+	 * @param combinedHash element 0 of return equals original LSH
+	 * @param timestampRole original entry is incremented monotonically for each subdivided entry
+	 * @param message original message
+	 * @return Array of domain, map, range, or LSH, timestampRole, noindex message
+	 */
+	private List<Comparable[]> segmentContent(Integer combinedHash, TimestampRole timestampRole, Message message) {
+		long seq = 0L;
+		List<Comparable[]> ret = new ArrayList<Comparable[]>();
+		String remain = message.content();
+	    if (remain == null || remain.isEmpty()) 
+	    	return ret;
+	    while (!remain.isEmpty()) {
+	        int maxLen = Math.min(MAX_DB_CONTENT_SIZE, remain.length());
+	        // find last delimiter within the first maxLen chars
+	        int splitPos = -1;
+	        String slice = remain.substring(0, maxLen);
+	        // prefer sentence end, then CR, then space
+	        splitPos = slice.lastIndexOf('.');
+	        if (splitPos == -1) splitPos = slice.lastIndexOf('\r');
+	        if (splitPos == -1) splitPos = slice.lastIndexOf(' ');
+	        // if no delimiter found and the message is longer than maxLen, split at maxLen
+	        if (splitPos == -1) {
+	            if (remain.length() > maxLen) {
+	                splitPos = maxLen; // split at maxLen (will use substring(0, maxLen))
+	            } else {
+	                splitPos = remain.length(); // take the rest
+	            }
+	        } else {
+	            // include the delimiter in the segment (optional). If you don't want it, use splitPos instead of splitPos+1
+	            splitPos = splitPos + 1;
+	        }
+	        // guard: ensure splitPos is within bounds
+	        if (splitPos <= 0) {
+	            // nothing to extract safely; break to avoid infinite loop
+	            break;
+	        }
+	        if (splitPos > remain.length()) 
+	        	splitPos = remain.length();
+	        String part = remain.substring(0, splitPos).trim();
+	        // update remain safely
+	        remain = (splitPos >= remain.length()) ? "" : remain.substring(splitPos);
+	        if (part.isEmpty()) {
+	            // continue loop; but ensure remain is shrinking (it is)
+	            continue;
+	        }
+	        Comparable<?>[] entry = new Comparable<?>[3];
+	        entry[0] = combinedHash;
+	        entry[1] = new TimestampRole(timestampRole.getTimestamp() + (seq++), timestampRole.getRole());
+	        ChatFormat.Message newMessage = new ChatFormat.Message(message.chatFormat(), message.role(), part);
+	        entry[2] = NoIndex.create(newMessage);
+	        ret.add(entry);
+	    }
+	    return ret;
 	}
 	/**
 	 * Find the nearest candidates using theta angle similarity. This is the arc cosine of the
@@ -384,8 +455,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			else
 				cosDist = cantensor.dot(0, fmessage, 0, fmessage.size());
 			cosDist = Math.acos(cosDist); // radians
-			if(DEBUG)
-				log.info("findNearest retrieved result set nearest size:"+thetaNearestResults.size()+" index "+i+" .) theta="+cosDist+" LSH="+thetaNearestResult.get(0)+"->"+thetaNearestResult.get(1));
+			//if(DEBUG)
+			//	log.info("findNearest retrieved result set nearest size:"+thetaNearestResults.size()+" index "+i+" .) theta="+cosDist+" LSH="+thetaNearestResult.get(0)+"->"+thetaNearestResult.get(1));
 			thetaToNearestMap.put(cosDist, i);
 		}
 		// descending cos similarity order
@@ -406,8 +477,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 					tsr.setTimestamp(tsRole.getTimestamp());
 					tsr.setRole(Role.ASSISTANT);
 					insertMap.put(valueList.get(listCtr), tsr); //nearest entry is USER, next is NOT ASSISTANT, so set this to look for ASSISTANT
-					if(DEBUG)
-						log.info("findNearest role USER insert after "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
+					//if(DEBUG)
+					//	log.info("findNearest role USER insert after "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
 					// now advance to next entry
 					++listCtr;	
 				} else
@@ -420,8 +491,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				tsr.setTimestamp(tsRole.getTimestamp());
 				tsr.setRole(Role.USER);
 				insertMap.put(valueList.get(listCtr), tsr); //nearest entry is ASSISTANT, previous was NOT USER or SYSTEM, so set this to look for USER
-				if(DEBUG)
-					log.info("findNearest role ASSISTANT insert before "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
+				//if(DEBUG)
+				//	log.info("findNearest role ASSISTANT insert before "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
 				++listCtr;
 				break;
 			default:
@@ -430,15 +501,15 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				break;
 			}
 		}
-		if(DEBUG)
-			log.info("findNearest insert map size:"+insertMap.size());
+		//if(DEBUG)
+		//	log.info("findNearest insert map size:"+insertMap.size());
 		// Now we have our insertMap so process those performing another parallel query
 		// to try and resolve associated interaction elements that are missing and then interpose those with our
 		// nearest list, if found. If we cant locate a corresponding interaction element, then skip the entry.
 		// Our map has a TimestampRole with a matching timestamp and the opposite role used to launch the query.
 		List<Object> timestampRoleQuery = new ArrayList<Object>(insertMap.values());
-		if(DEBUG)
-			log.info("findNearest timestampRoleQuery size:"+timestampRoleQuery.size());
+		//if(DEBUG)
+		//	log.info("findNearest timestampRoleQuery size:"+timestampRoleQuery.size());
 		List<Result> timestampRoleResult = null;
 		if(!timestampRoleQuery.isEmpty()) {
 			timestampRoleResult = queryParallelMap(timestampRoleQuery);
@@ -448,85 +519,100 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// walk over interactions with our insert map ready
 		int contentSize = promptFrame.content().length();
 		listCtr = 0;
-		loopExit: while(listCtr < valueList.size()) {
-			TimestampRole tsRole = (TimestampRole) ((Result)thetaNearestResults.get(valueList.get(listCtr))).get(1);
-			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)(thetaNearestResults.get(valueList.get(listCtr))).get(2)).getInstance();
-			switch(tsRole.getRole()) {
-			case Role.SYSTEM:
-			case Role.USER:
-				// do we have an insert?
-				TimestampRole insertMapValue = insertMap.get(valueList.get(listCtr));
-				if(insertMapValue != null) {
-					Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
-					if(insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-						contentSize += message.content().length();
-						contentSize += insertMessage.get().content().length();
-						if(contentSize < maxAdjustedTokens) {
-							returnMessages.add(message);
-							returnMessages.add(insertMessage.get());
-						} else
-							break loopExit;
-					}
-				} else {
-					if(returnMessages.contains(message)) {
-						// assume this entry and next are redundant
-						listCtr+=2;
-						break;
-					}
-					// no insert, assume next entry is valid ASSISTANT
-					contentSize += message.content().length();
-					if(contentSize < maxAdjustedTokens) {
-						returnMessages.add(message);
-					} else
-						break loopExit;
-				}
-				// now advance to next entry
-				++listCtr;	 
-				break;
-			case Role.ASSISTANT:
-				// do we have an insert?
-				insertMapValue = insertMap.get(valueList.get(listCtr));
-				if(insertMapValue != null) {
-					Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
-					// If we didnt find a corresponding interaction, skip it as malformed
-					if(insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-						contentSize += message.content().length();
-						contentSize += insertMessage.get().content().length();
-						if(contentSize < maxAdjustedTokens) {
-							// note order of insert; USER/SYSTEM before this ASSISTANT
-							returnMessages.add(insertMessage.get());
-							returnMessages.add(message);
-						} else
-							break loopExit;
-					}
-				} else {
-					// no insert, assume next entry is valid USER or SYSTEM
-					if(returnMessages.contains(message)) {
-						// assume this entry and next are redundant
-						listCtr+=2;
-						break;
-					}
-					contentSize += message.content().length();
-					if(contentSize < maxAdjustedTokens) {
-						returnMessages.add(message);
-					} else
-						break loopExit;
-				}
-				++listCtr;
-				break;
-			default:
-				log.error("Unknown role encountered");
-				break;
-			}
-		}
+		loopExit: while (listCtr < valueList.size()) {
+		    int idx = valueList.get(listCtr);
+		    TimestampRole tsRole = (TimestampRole) ((Result) thetaNearestResults.get(idx)).get(1);
+		    ChatFormat.Message message = (ChatFormat.Message) ((NoIndex) (thetaNearestResults.get(idx)).get(2)).getInstance();
+		    switch (tsRole.getRole()) {
+		        case Role.SYSTEM:
+		        case Role.USER: {
+		            TimestampRole insertMapValue = insertMap.get(idx);
+		            if (insertMapValue != null) {
+		                Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
+		                if (insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
+		                    int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
+		                    if (prospective < maxAdjustedTokens) {
+		                        returnMessages.add(message);
+		                        returnMessages.add(insertMessage.get());
+		                        contentSize = prospective;
+		                        listCtr += 1; // advance past this entry
+		                        continue;     // next iteration
+		                    } else {
+		                        break loopExit;
+		                    }
+		                } else {
+		                    // nothing to add for this entry; advance
+		                    listCtr += 1;
+		                    continue;
+		                }
+		            } else {
+		                if (returnMessages.contains(message)) {
+		                    listCtr += 2;
+		                    continue;
+		                }
+		                int prospective = contentSize + message.content().length();
+		                if (prospective < maxAdjustedTokens) {
+		                    returnMessages.add(message);
+		                    contentSize = prospective;
+		                    listCtr += 1;
+		                    continue;
+		                } else {
+		                    break loopExit;
+		                }
+		            }
+		        }
+		        case Role.ASSISTANT: {
+		            TimestampRole insertMapValue = insertMap.get(idx);
+		            if (insertMapValue != null) {
+		                Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
+		                if (insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
+		                    int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
+		                    if (prospective < maxAdjustedTokens) {
+		                        // USER/SYSTEM before ASSISTANT
+		                        returnMessages.add(insertMessage.get());
+		                        returnMessages.add(message);
+		                        contentSize = prospective;
+		                        listCtr += 1;
+		                        continue;
+		                    } else {
+		                        break loopExit;
+		                    }
+		                } else {
+		                    listCtr += 1;
+		                    continue;
+		                }
+		            } else {
+		                if (returnMessages.contains(message)) {
+		                    listCtr += 2;
+		                    continue;
+		                }
+		                int prospective = contentSize + message.content().length();
+		                if (prospective < maxAdjustedTokens) {
+		                    returnMessages.add(message);
+		                    contentSize = prospective;
+		                    listCtr += 1;
+		                    continue;
+		                } else {
+		                    break loopExit;
+		                }
+		            }
+		        }
+		        default:
+		            log.error("Unknown role encountered");
+		            listCtr += 1;
+		            continue;
+		    }
+		} // end while	
 		if(DEBUG)
 			log.info("findNearest "+thetaToNearestMap.values().size()+" original context entries, current nearest="+thetaNearestResults.size()+" content size="+contentSize+
 									" max:"+maxAdjustedTokens+" # returns="+returnMessages.size());	
 		// put most recent user query last, we already accounted for context size at start of pipeline
 		returnMessages.add(promptFrame);
 		if(DEBUG) {
+			int ilen = 0;
 			for(int i = 0; i < returnMessages.size(); i++) {
-				log.info(i+".) "+returnMessages.get(i));
+				ilen += returnMessages.get(i).content().length();
+				log.info(i+".) length="+returnMessages.get(i).content().length()+" total="+ilen+" - "+returnMessages.get(i));
 			}
 		}
 		return returnMessages;
