@@ -265,20 +265,76 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @return sum of timestamp offsets from base, add each entry inserted
 	 */
 	public long addInteraction(ChatFormat chatFormat, Long ts, ChatFormat.Role initiator, ChatFormat.Message invocation, ChatFormat.Message response) {
-		long sumOffset;
-		TimestampRole tr_user = new TimestampRole(ts, initiator);
+		long timeOffset = 0L;
+		//TimestampRole tr_user = new TimestampRole(ts, initiator);
 		//try(Timer _ = Timer.log("addInteraction: SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
 			try {
-				sumOffset = add(chatFormat, tr_user, invocation);
-				TimestampRole tr_assistant = new TimestampRole(ts + sumOffset, ChatFormat.Role.ASSISTANT);
-				sumOffset += add(chatFormat, tr_assistant, response);
-			} catch (IllegalAccessException | ClassNotFoundException | IOException | InterruptedException | ExecutionException e) {
+				//
+				// add user
+				//
+				//sumOffset = add(chatFormat, tr_user, invocation);
+				ArrayList<?>[] userSegments = new ArrayList<?>[hashTable.size()];
+				FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(invocation.content())));
+				for(int i = 0; i < hashTable.size(); i++) {
+					userSegments[i] = new ArrayList<TimestampRole>();
+					Integer combinedHash = hash(hashTable.get(i), fvec);
+					if(invocation.content().length() >= MAX_DB_CONTENT_SIZE) {
+						TimestampRole tr_user = new TimestampRole(ts + timeOffset, initiator);
+						ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, tr_user, invocation);
+						for(Comparable[] c: segmentedContent)
+							((ArrayList<TimestampRole>)userSegments[i]).add((TimestampRole) c[1]);
+						timeOffset += segmentedContent.size();
+						CompletableFuture<RelationList> res = dbClient.multiStore(xid, segmentedContent);
+						res.get();
+					} else {
+						TimestampRole tr_user = new TimestampRole(ts + timeOffset, initiator);
+						((ArrayList<TimestampRole>)userSegments[i]).add(tr_user);
+						timeOffset += 1L;
+						NoIndex noIndex = NoIndex.create(invocation);
+						CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_user, noIndex);
+						res.get();
+					}
+				}
+				//
+				// add assistant, timestamp roles must initiators match regardless
+				//
+				//sumOffset += add(chatFormat, tr_assistant, response);
+				fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(response.content())));
+				for(int i = 0; i < hashTable.size(); i++) {
+					Integer combinedHash = hash(hashTable.get(i), fvec);
+					if(invocation.content().length() >= MAX_DB_CONTENT_SIZE) {
+						TimestampRole tr_assistant = new TimestampRole(ts, ChatFormat.Role.ASSISTANT);
+						ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, tr_assistant, invocation);
+						// adjust segmentedContent to match user role segments, this means possible duplicate or remove result
+						int responseCtr = 0;
+						// potentially multiple response entries for multiple invocation segments, we may end
+						// dropping some parts of response to match invocation segments, or duplicating from start
+						for(TimestampRole trl_assistant: (ArrayList<TimestampRole>)userSegments[i]) {
+							tr_assistant = new TimestampRole(trl_assistant.getTimestamp(), ChatFormat.Role.ASSISTANT);
+							Comparable[] responseContent = segmentedContent.get(responseCtr++);
+							CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, trl_assistant, responseContent[2]);
+							res.get();
+							if(responseCtr == segmentedContent.size())
+								responseCtr = 0;
+						}
+					} else {
+						// Only 1 response entry for possibly multiple invocation segments
+						// adjust segmentedContent to match user role segments, this means possible duplicate
+						for(TimestampRole tr_assistant: (ArrayList<TimestampRole>)userSegments[i]) {
+							tr_assistant.setRole(ChatFormat.Role.ASSISTANT);
+							NoIndex noIndex = NoIndex.create(response);
+							CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_assistant, noIndex);
+							res.get();
+						}
+					}
+				}
+			} catch (InterruptedException | ExecutionException e) {
 				log.error(e);
 				dbClient.rollback(xid);
 				return 0L;
 			}
 			dbClient.commit(xid); // Only after both store ops succeed
-			return sumOffset;
+			return timeOffset;
 		//}
 	}	
 	/**
@@ -301,14 +357,16 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		for(int i = 0; i < hashTable.size(); i++) {
 			Integer combinedHash = hash(hashTable.get(i), fvec);
 			if(invocation.content().length() >= MAX_DB_CONTENT_SIZE) {
-				ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, timestampRole, invocation);
-				timeOffset = segmentedContent.size();
+				TimestampRole newTsr = new TimestampRole(timestampRole.getTimestamp() + timeOffset, timestampRole.getRole());
+				ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, newTsr, invocation);
+				timeOffset += segmentedContent.size();
 				CompletableFuture<RelationList> res = dbClient.multiStore(xid, segmentedContent);
 				res.get();
 			} else {
-				timeOffset = 1L;
+				TimestampRole newTsr = new TimestampRole(timestampRole.getTimestamp() + timeOffset, timestampRole.getRole());
+				timeOffset += 1L;
 				NoIndex noIndex = NoIndex.create(invocation);
-				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, timestampRole, noIndex);
+				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, newTsr, noIndex);
 				res.get();
 			}
 		}
