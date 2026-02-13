@@ -584,76 +584,92 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		    switch (tsRole.getRole()) {
 		        case Role.SYSTEM:
 		        case Role.USER: {
-		            TimestampRole insertMapValue = insertMap.get(idx);
-		            if (insertMapValue != null) {
-		                Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
-		                if (insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-		                    int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
-		                    if (prospective < maxAdjustedTokens) {
-		                        returnMessages.add(message);
-		                        returnMessages.add(insertMessage.get());
-		                        contentSize = prospective;
-		                        listCtr += 1; // advance past this entry
-		                        continue;     // next iteration
-		                    } else {
-		                        break loopExit;
-		                    }
-		                } else {
-		                    // nothing to add for this entry; advance
-		                    listCtr += 1;
-		                    continue;
-		                }
-		            } else {
-		                if (returnMessages.contains(message)) {
-		                    listCtr += 2;
-		                    continue;
-		                }
-		                int prospective = contentSize + message.content().length();
-		                if (prospective < maxAdjustedTokens) {
-		                    returnMessages.add(message);
-		                    contentSize = prospective;
-		                    listCtr += 1;
-		                    continue;
-		                } else {
-		                    break loopExit;
-		                }
-		            }
+		        	TimestampRole insertMapValue = insertMap.get(idx);
+		        	if (insertMapValue != null) {
+		        		// we have an insert, match insert then move on to next entry
+		        		Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
+		        		if (insertMessage.isPresent()) {
+		        			if(!returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
+		        				int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
+		        				if (prospective < maxAdjustedTokens) {
+		        					returnMessages.add(message);
+		        					returnMessages.add(insertMessage.get());
+		        					contentSize = prospective;
+		        					listCtr += 1; // advance past this entry
+		        					continue;     // next iteration
+		        				} else {
+		        					break loopExit;
+		        				} 
+		        			} else {
+		        				// results contained original user message or message to be inserted already, since
+		        				// we have an insert, skip just this one entry
+		        				listCtr += 1;
+		        				continue;
+		        			}
+		        		} else {
+		        			// we found an insert map directive, but then no matching database entry to insert, this indicates bad data sequence
+		        			log.info("NO MATCHING ASSISTANT ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
+		        			listCtr += 1;
+		        			continue;
+		        		}
+		        	} else {
+		        		// we have no insert, if results already contain user message, skip both this and next assistant
+		        		if (returnMessages.contains(message)) {
+		        			listCtr += 2;
+		        			continue;
+		        		}
+		        		int prospective = contentSize + message.content().length();
+		        		// insert and move on
+		        		if (prospective < maxAdjustedTokens) {
+		        			returnMessages.add(message);
+		        			contentSize = prospective;
+		        			listCtr += 1;
+		        			continue;
+		        		} else {
+		        			break loopExit;
+		        		}
+		        	}
 		        }
 		        case Role.ASSISTANT: {
-		            TimestampRole insertMapValue = insertMap.get(idx);
-		            if (insertMapValue != null) {
-		                Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
-		                if (insertMessage.isPresent() && !returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-		                    int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
-		                    if (prospective < maxAdjustedTokens) {
-		                        // USER/SYSTEM before ASSISTANT
-		                        returnMessages.add(insertMessage.get());
-		                        returnMessages.add(message);
-		                        contentSize = prospective;
-		                        listCtr += 1;
-		                        continue;
-		                    } else {
-		                        break loopExit;
-		                    }
-		                } else {
-		                    listCtr += 1;
-		                    continue;
-		                }
-		            } else {
-		                if (returnMessages.contains(message)) {
-		                    listCtr += 2;
-		                    continue;
-		                }
-		                int prospective = contentSize + message.content().length();
-		                if (prospective < maxAdjustedTokens) {
-		                    returnMessages.add(message);
-		                    contentSize = prospective;
-		                    listCtr += 1;
-		                    continue;
-		                } else {
-		                    break loopExit;
-		                }
-		            }
+		        	TimestampRole insertMapValue = insertMap.get(idx);
+		        	if (insertMapValue != null) {
+		        		Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
+		        		if (insertMessage.isPresent() ) {
+		        			if(!returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
+		        				int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
+		        				if (prospective < maxAdjustedTokens) {
+		        					// USER/SYSTEM before ASSISTANT
+		        					returnMessages.add(insertMessage.get());
+		        					returnMessages.add(message);
+		        					contentSize = prospective;
+		        					listCtr += 1;
+		        					continue;
+		        				} else {
+		        					break loopExit;
+		        				}
+		        			} else {
+		        				// we found our insert, and checked and found redundancy, so we can skip both
+		        				listCtr += 1;
+		        				continue;
+		        			}
+		        		} else {
+		        			// we found an insert map directive, but then no matching database entry to insert, this indicates bad data sequence
+		        			log.info("NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
+		        			listCtr += 1;
+		        			continue;
+		        		}
+		        	// no insert, we have to insert ASSISTANT as we may have valid user
+		        	} else {
+		        		int prospective = contentSize + message.content().length();
+		        		if (prospective < maxAdjustedTokens) {
+		        			returnMessages.add(message);
+		        			contentSize = prospective;
+		        			listCtr += 1;
+		        			continue;
+		        		} else {
+		        			break loopExit;
+		        		}
+		        	}
 		        }
 		        default:
 		            log.error("Unknown role encountered");
