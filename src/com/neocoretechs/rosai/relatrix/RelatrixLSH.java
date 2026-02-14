@@ -18,6 +18,7 @@ import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -82,6 +83,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	private int maxAdjustedTokens; // tokenized vs character context count estimate
 	private static final float CONTEXT_OVERHEAD_PCT = 0.35f;
 	private static final int MAX_DB_CONTENT_SIZE = 2000;
+	private static AtomicLong uniTime = new AtomicLong(System.currentTimeMillis());
 	/**
 	 * Contains the mapping between a combination of a number of hashes (encoded
 	 * using an integer) and a list of possible nearest neighbors
@@ -126,7 +128,18 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public UUID getKey() {
 		return key;
 	}
-
+	/**
+	 * Keep a global, monotonically incrementing time value that is synchronized with global time in milliseconds.
+	 * @return The new incremented time, which may reflect current time if the value would be less than current time, or more than current if 2 calls would overlap.
+	 */
+	private static long newUniTime() {
+		long retTime = uniTime.incrementAndGet();
+		if(retTime < System.currentTimeMillis()) {
+			uniTime.set(System.currentTimeMillis());
+			retTime = uniTime.get();
+		}
+		return retTime;
+	}
 	/**
 	 * Query the hash table for a vector. It calculates the hash for the vector,
 	 * and does a lookup in the hash table. If no candidates are found, an empty
@@ -147,8 +160,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		ArrayList<Result> res = new ArrayList<Result>();
 		for(int i = 0; i < hashTable.size(); i++) {
 			Integer combinedHash = hash(hashTable.get(i), normalize(query));
-			if(DEBUG)
-				log.info("Querying combined hash for query "+i+" of "+hashTable.size()+":"+combinedHash);
+			//if(DEBUG)
+			//	log.info("Querying combined hash for query "+i+" of "+hashTable.size()+":"+combinedHash);
 			CompletableFuture<Iterator> cit = dbClient.findSet(xid, combinedHash, '?', '?');
 			Iterator<?> it = cit.get();
 			//int cnt = 0;
@@ -258,138 +271,78 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	/**
 	 * Add the user/assistant interaction. Generates either commit or rollback on duplicate key.
 	 * @param chatFormat 
-	 * @param ts the timestamp
 	 * @param initiator the initiator of the interaction; either USER or SYSTEM
 	 * @param invocation
 	 * @param response response
-	 * @return sum of timestamp offsets from base, add each entry inserted
 	 */
-	public long addInteraction(ChatFormat chatFormat, Long ts, ChatFormat.Role initiator, ChatFormat.Message invocation, ChatFormat.Message response) {
-		long timeOffset = 0L;
-		//TimestampRole tr_user = new TimestampRole(ts, initiator);
-		//try(Timer _ = Timer.log("addInteraction: SaveState of reponse:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
-			try {
-				//
-				// add user
-				//
-				//sumOffset = add(chatFormat, tr_user, invocation);
-				ArrayList<?>[] userSegments = new ArrayList<?>[hashTable.size()];
-				FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(invocation.content())));
-				for(int i = 0; i < hashTable.size(); i++) {
-					userSegments[i] = new ArrayList<TimestampRole>();
-					Integer combinedHash = hash(hashTable.get(i), fvec);
-					if(invocation.content().length() >= MAX_DB_CONTENT_SIZE) {
-						TimestampRole tr_user = new TimestampRole(ts + timeOffset, initiator);
-						ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, tr_user, invocation);
-						for(Comparable[] c: segmentedContent)
-							((ArrayList<TimestampRole>)userSegments[i]).add((TimestampRole) c[1]);
-						timeOffset += segmentedContent.size();
-						CompletableFuture<RelationList> res = dbClient.multiStore(xid, segmentedContent);
-						res.get();
-					} else {
-						TimestampRole tr_user = new TimestampRole(ts + timeOffset, initiator);
-						((ArrayList<TimestampRole>)userSegments[i]).add(tr_user);
-						timeOffset += 1L;
-						NoIndex noIndex = NoIndex.create(invocation);
-						CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_user, noIndex);
-						res.get();
-					}
-				}
-				//
-				// add assistant, timestamp roles must initiators match regardless
-				//
-				//sumOffset += add(chatFormat, tr_assistant, response);
-				fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(response.content())));
-				for(int i = 0; i < hashTable.size(); i++) {
-					Integer combinedHash = hash(hashTable.get(i), fvec);
-					if(invocation.content().length() >= MAX_DB_CONTENT_SIZE) {
-						TimestampRole tr_assistant = new TimestampRole(ts, ChatFormat.Role.ASSISTANT);
-						ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, tr_assistant, invocation);
-						// adjust segmentedContent to match user role segments, this means possible duplicate or remove result
-						int responseCtr = 0;
-						// potentially multiple response entries for multiple invocation segments, we may end
-						// dropping some parts of response to match invocation segments, or duplicating from start
-						for(TimestampRole trl_assistant: (ArrayList<TimestampRole>)userSegments[i]) {
-							tr_assistant = new TimestampRole(trl_assistant.getTimestamp(), ChatFormat.Role.ASSISTANT);
-							Comparable[] responseContent = segmentedContent.get(responseCtr++);
-							CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, trl_assistant, responseContent[2]);
-							res.get();
-							if(responseCtr == segmentedContent.size())
-								responseCtr = 0;
-						}
-					} else {
-						// Only 1 response entry for possibly multiple invocation segments
-						// adjust segmentedContent to match user role segments, this means possible duplicate
-						for(TimestampRole tr_assistant: (ArrayList<TimestampRole>)userSegments[i]) {
-							tr_assistant.setRole(ChatFormat.Role.ASSISTANT);
-							NoIndex noIndex = NoIndex.create(response);
-							CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_assistant, noIndex);
-							res.get();
-						}
-					}
-				}
-			} catch (InterruptedException | ExecutionException e) {
-				log.error(e);
-				dbClient.rollback(xid);
-				return 0L;
+	public void addInteraction(ChatFormat chatFormat, ChatFormat.Message invocation, ChatFormat.Message response) {
+		//try(Timer _ = Timer.log("addInteraction: SaveState:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
+		List<ChatFormat.Message[]> segmentedContent = segmentContent(invocation, response);
+		for(ChatFormat.Message[] segments : segmentedContent) {
+			//
+			// add user
+			//
+			long baseTime = newUniTime();
+			FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(segments[0].content())));
+			for(int i = 0; i < hashTable.size(); i++) {
+				Integer combinedHash = hash(hashTable.get(i), fvec);
+				TimestampRole tr_user = new TimestampRole(baseTime, segments[0].role());
+				NoIndex noIndex = NoIndex.create(segments[0]);
+				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_user, noIndex);
+				try {
+					res.get();
+				} catch (InterruptedException | ExecutionException e) {}
 			}
-			dbClient.commit(xid); // Only after both store ops succeed
-			return timeOffset;
-		//}
-	}	
-	/**
-	 * Add a vector to the index. Create a UUID and store the vector in a K/V datastore, use the UUID to
-	 * reference the vector in the Relatrix relationship.
-	 * @param chatFormat 
-	 * @param timestampRole The map of the morphism to store LSH->TimestampRole->NoIndex key contains timestamp and role
-	 * @param invocation the list of tokens
-	 * @return TODO
-	 * @throws DuplicateKeyException attempt to insert duplicate combined hash.timestampRole key
-	 * @throws IOException asynchronous database client exception
-	 * @throws ClassNotFoundException asynchronous database client exception
-	 * @throws IllegalAccessException asynchronous database client exception
-	 * @throws ExecutionException asynchronous database client exception
-	 * @throws InterruptedException asynchronous database client exception
-	 */
-	public long add(ChatFormat chatFormat, TimestampRole timestampRole, ChatFormat.Message invocation) throws IllegalAccessException, ClassNotFoundException, IOException, InterruptedException, ExecutionException {
-		FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(invocation.content())));
-		long timeOffset = 0L;
-		for(int i = 0; i < hashTable.size(); i++) {
-			Integer combinedHash = hash(hashTable.get(i), fvec);
-			if(invocation.content().length() >= MAX_DB_CONTENT_SIZE) {
-				TimestampRole newTsr = new TimestampRole(timestampRole.getTimestamp() + timeOffset, timestampRole.getRole());
-				ArrayList<Comparable[]> segmentedContent = (ArrayList<Comparable[]>) segmentContent(combinedHash, newTsr, invocation);
-				timeOffset += segmentedContent.size();
-				CompletableFuture<RelationList> res = dbClient.multiStore(xid, segmentedContent);
-				res.get();
-			} else {
-				TimestampRole newTsr = new TimestampRole(timestampRole.getTimestamp() + timeOffset, timestampRole.getRole());
-				timeOffset += 1L;
-				NoIndex noIndex = NoIndex.create(invocation);
-				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, newTsr, noIndex);
-				res.get();
+			//
+			// add assistant, timestamp roles must initiators match regardless
+			//
+			fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(segments[1].content())));
+			for(int i = 0; i < hashTable.size(); i++) {
+				Integer combinedHash = hash(hashTable.get(i), fvec);
+				TimestampRole tr_assistant = new TimestampRole(baseTime, ChatFormat.Role.ASSISTANT);
+				NoIndex noIndex = NoIndex.create(segments[1]);
+				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_assistant, noIndex);
+				try {
+					res.get();
+				} catch (InterruptedException | ExecutionException e) {}
 			}
 		}
-		return timeOffset;
-	}
+		dbClient.commit(xid); // Only after both store ops succeed
+		//}
+	}	
+	
 	/**
 	 * Segment the content into chunks of monotonically increasing TimestampRole to allow more progressive increase of context size
-	 * @param combinedHash element 0 of return equals original LSH
-	 * @param timestampRole original entry is incremented monotonically for each subdivided entry
+	 * the recursively call addInteraction until size decreases below threshold
 	 * @param message original message
-	 * @return Array of domain, map, range, or LSH, timestampRole, noindex message
+	 * @return final message chunk to store as original interaction element
 	 */
-	private List<Comparable[]> segmentContent(Integer combinedHash, TimestampRole timestampRole, Message message) {
-		long seq = 0L;
-		List<Comparable[]> ret = new ArrayList<Comparable[]>();
+	private List<ChatFormat.Message[]> segmentContent(Message message, Message message2) {
+		List<ChatFormat.Message[]> ret = new ArrayList<ChatFormat.Message[]>();
 		String remain = message.content();
 	    if (remain == null || remain.isEmpty()) 
 	    	return ret;
+    	ChatFormat.Message[] retEntry = new ChatFormat.Message[2];
+    	int indexA = 0;
 	    while (!remain.isEmpty()) {
+	    	if(indexA == 2) {
+	    		ret.add(retEntry);
+	    		retEntry = new ChatFormat.Message[2];
+	    		indexA = 0;
+	    	}
 	        int maxLen = Math.min(MAX_DB_CONTENT_SIZE, remain.length());
 	        // find last delimiter within the first maxLen chars
 	        int splitPos = -1;
 	        String slice = remain.substring(0, maxLen);
+	        if(maxLen < MAX_DB_CONTENT_SIZE) {
+	            ChatFormat.Message newMessage;
+	            if(indexA == 0)
+	            	newMessage = new ChatFormat.Message(message.chatFormat(), message.role(), slice);
+	            else
+	            	newMessage = new ChatFormat.Message(message.chatFormat(), ChatFormat.Role.ASSISTANT, slice);
+		        retEntry[indexA++] = newMessage;
+		        break;
+	        }
 	        // prefer sentence end, then CR, then space
 	        splitPos = slice.lastIndexOf('.');
 	        if (splitPos == -1) splitPos = slice.lastIndexOf('\r');
@@ -419,12 +372,84 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	            // continue loop; but ensure remain is shrinking (it is)
 	            continue;
 	        }
-	        Comparable<?>[] entry = new Comparable<?>[3];
-	        entry[0] = combinedHash;
-	        entry[1] = new TimestampRole(timestampRole.getTimestamp() + (seq++), timestampRole.getRole());
-	        ChatFormat.Message newMessage = new ChatFormat.Message(message.chatFormat(), message.role(), part);
-	        entry[2] = NoIndex.create(newMessage);
-	        ret.add(entry);
+	        ChatFormat.Message newMessage;
+            if(indexA == 0)
+            	newMessage = new ChatFormat.Message(message.chatFormat(), message.role(), part);
+            else
+            	newMessage = new ChatFormat.Message(message.chatFormat(), ChatFormat.Role.ASSISTANT, part);
+	        retEntry[indexA++] = newMessage;
+	        if(DEBUG)
+	        	log.info("segmentContent splitPos:"+splitPos+" part:"+part+" remain:"+remain);
+	    }
+	    // next message
+	    remain = message2.content();
+	    while (!remain.isEmpty()) {
+	    	if(indexA == 2) {
+	    		ret.add(retEntry);
+	    		retEntry = new ChatFormat.Message[2];
+	    		indexA = 0;
+	    	}
+	        int maxLen = Math.min(MAX_DB_CONTENT_SIZE, remain.length());
+	        // find last delimiter within the first maxLen chars
+	        int splitPos = -1;
+	        String slice = remain.substring(0, maxLen);
+	        if(maxLen < MAX_DB_CONTENT_SIZE) {
+	        	if(indexA == 1) {
+	        		ChatFormat.Message newMessage = new ChatFormat.Message(message.chatFormat(), ChatFormat.Role.ASSISTANT, slice);
+	        		retEntry[indexA++] = newMessage;
+	        		ret.add(retEntry);
+	        		break;
+	        	}
+	        }
+	        // prefer sentence end, then CR, then space
+	        splitPos = slice.lastIndexOf('.');
+	        if (splitPos == -1) splitPos = slice.lastIndexOf('\r');
+	        if (splitPos == -1) splitPos = slice.lastIndexOf(' ');
+	        // if no delimiter found and the message is longer than maxLen, split at maxLen
+	        if (splitPos == -1) {
+	            if (remain.length() > maxLen) {
+	                splitPos = maxLen; // split at maxLen (will use substring(0, maxLen))
+	            } else {
+	                splitPos = remain.length(); // take the rest
+	            }
+	        } else {
+	            // include the delimiter in the segment (optional). If you don't want it, use splitPos instead of splitPos+1
+	            splitPos = splitPos + 1;
+	        }
+	        // guard: ensure splitPos is within bounds
+	        if (splitPos <= 0) {
+	            // nothing to extract safely; break to avoid infinite loop
+	            break;
+	        }
+	        if (splitPos > remain.length()) 
+	        	splitPos = remain.length();
+	        String part = remain.substring(0, splitPos).trim();
+	        // update remain safely
+	        remain = (splitPos >= remain.length()) ? "" : remain.substring(splitPos);
+	        if (part.isEmpty()) {
+	            // continue loop; but ensure remain is shrinking (it is)
+	            continue;
+	        }
+	        ChatFormat.Message newMessage;
+	        if(indexA == 0)
+	        	newMessage = new ChatFormat.Message(message.chatFormat(), ChatFormat.Role.USER, part);
+	        else
+	        	newMessage = new ChatFormat.Message(message.chatFormat(), ChatFormat.Role.ASSISTANT, part);
+	        retEntry[indexA++] = newMessage;
+	        if(DEBUG)
+	        	log.info("segmentContent splitPos:"+splitPos+" part:"+part+" remain:"+remain);
+	    }
+	    // have to fill array
+	    if(indexA == 1) {
+	        int splitPos = retEntry[0].content().lastIndexOf('.');
+	        if (splitPos == -1) splitPos = retEntry[0].content().lastIndexOf('\r');
+	        if (splitPos == -1) splitPos = retEntry[0].content().lastIndexOf(' ');
+	        if (splitPos == -1) splitPos = retEntry[0].content().length()/2;
+	        ChatFormat.Message newA = new ChatFormat.Message(retEntry[0].chatFormat(), ChatFormat.Role.USER, retEntry[0].content().substring(0,splitPos));
+	        ChatFormat.Message newB = new ChatFormat.Message(retEntry[0].chatFormat(), ChatFormat.Role.ASSISTANT, retEntry[0].content().substring(splitPos));
+	        retEntry[0] = newA;
+	        retEntry[1] = newB;
+	        ret.add(retEntry);
 	    }
 	    return ret;
 	}
@@ -460,8 +485,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public List<ChatFormat.Message> findNearest(ChatFormat chatFormat, ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> thetaNearestResults = null;
 		List<Integer> promptFrameTokens = chatFormat.stripFormatting(chatFormat.encodeAsList(promptFrame.content()));
-		if(DEBUG)
-			log.info("findNearest User query has "+promptFrameTokens.size()+" tokens from "+promptFrame);
+		//if(DEBUG)
+		//	log.info("findNearest User query has "+promptFrameTokens.size()+" tokens from "+promptFrame);
 		List<ChatFormat.Message> returnMessages = new ArrayList<ChatFormat.Message>();
 		FloatTensor fmessage = normalize(promptFrameTokens);
 		thetaNearestResults = queryParallel(fmessage);
@@ -720,11 +745,10 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		Optional<Result> res = Optional.empty();
 		for(Result queryResult: source) {
 			TimestampRole timestampQueryResult = (TimestampRole) queryResult.get(0);
-			if(DEBUG)
-				log.info("findNearest.matchTimestamp timestampQueryResult="+timestampQueryResult+" target="+target+" queryResult="+queryResult);
+			//if(DEBUG)
+			//	log.info("findNearest.matchTimestamp timestampQueryResult="+timestampQueryResult+" target="+target+" queryResult="+queryResult);
 			//String stime1 = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampQueryResult.getTimestamp()), ZoneId.systemDefault()).toString();
 			//String stime2 = LocalDateTime.ofInstant(Instant.ofEpochMilli(target.getTimestamp()), ZoneId.systemDefault()).toString();
-			//if(stime1.equals(stime2)) {
 			if(timestampQueryResult.getTimestamp().longValue() == target.getTimestamp().longValue()) {
 				res = Optional.ofNullable(queryResult);
 				break;
@@ -742,16 +766,16 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	@SuppressWarnings("unused")
 	private void getTimestampRole(ChatFormat chatFormat, List<ChatFormat.Message> returns, TimestampRole trr) throws InterruptedException, ExecutionException {
-		if(DEBUG)
-			log.info("getTimestampRole for "+trr);
+		//if(DEBUG)
+		//	log.info("getTimestampRole for "+trr);
 		//CompletableFuture<Stream> cit = dbClient.findStream(xid, '*', trr, '?');
 		//cit.get().forEach(e->{
 		CompletableFuture<Iterator> cit = dbClient.findSet(xid, '*', trr, '?');
 		Iterator<?> it = cit.get();
 		// get one instance
 		if(it.hasNext()) {
-			if(DEBUG)
-				log.info("getTimeStampRole result");
+			//if(DEBUG)
+				//log.info("getTimeStampRole result");
 			//addRetrievedMessage((Result)e, trr, results, returns, tokenizer);
 			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)((Result)it.next()).get(0)).getInstance();
 			returns.add(message);

@@ -221,7 +221,7 @@ public class ModelRunner extends AbstractNodeMain {
 						log.info("***Queueing from system preamble:"+response.get());
 					for(ChatFormat.Message s: prompts) {
 						ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
-						relatrixLSH.addInteraction(chatFormat, System.currentTimeMillis(), ChatFormat.Role.SYSTEM, s, responseMessage);
+						relatrixLSH.addInteraction(chatFormat, s, responseMessage);
 					}
 					outgoingMessageQueue.addLast(response.get());
 				}
@@ -385,7 +385,7 @@ public class ModelRunner extends AbstractNodeMain {
 						if(DEBUG)
 							log.info("***Queueing from role:"+chatMessage.role()+" message:"+response.get());
 						ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
-						relatrixLSH.addInteraction(chatFormat, System.currentTimeMillis(), chatMessage.role(), chatMessage, responseMessage);
+						relatrixLSH.addInteraction(chatFormat, chatMessage, responseMessage);
 						outgoingMessageQueue.addLast(response.get());
 					}
 					//try(Timer _ = Timer.log("reset context")) {
