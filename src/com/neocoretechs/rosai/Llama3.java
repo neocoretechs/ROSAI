@@ -73,7 +73,7 @@ public class Llama3 {
                 //IntTensor it = new IntTensor(dialogTokens);
                 //StringTensor p = new StringTensor(new byte[dialogTokens.size()+2]);
                 //DeviceManager.tokenToString(it, dialogTokens.size(), p);
-                StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
+                StringTensor p = chatFormat.extractDialogPrompt(dialog);
         		System.out.println("prompt:"+p);
         		int tokNum = 0;
         		IntTensor retTokens = IntTensor.allocate(options.getMaxTokens());

@@ -109,7 +109,7 @@ public final class DeviceManager {
 		return retString;
 	}
 	
-	public static int applyChatTemplate(MessageTensor chatSegt, StringTensor outSegt, int msgNum, int bufLen, boolean addAssistantPrompt) {
+	public static int applyChatTemplate(MessageTensor chatSegt, StringTensor outSegt, int msgNum, int bufLen) {
 		long chatSeg = chatSegt.getSegment().address();
 		long outSeg = outSegt.getSegment().address();
 		int outLen;
@@ -117,7 +117,7 @@ public final class DeviceManager {
 	        outLen = (int) Llama3.applyChatTemplateMH.invokeExact(
 	            chatSeg,                                         // chat
 	            (long) msgNum,                              // n_msg
-	            addAssistantPrompt,                              // add_ass
+	            false,                              // add_ass
 	            outSeg,                                          // buf
 	            bufLen                                           // len
 	        );

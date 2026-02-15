@@ -445,7 +445,7 @@ public class ModelRunner extends AbstractNodeMain {
         String userText = DeviceManager.decode(chatFormat, promptTokens);
         ChatFormat.Message promptMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, userText);
         dialog.add(promptMessage);
-        StringTensor p = chatFormat.extractDialogPrompt(true, dialog);
+        StringTensor p = chatFormat.extractDialogPrompt(dialog);
         if(p.size() >= Llama3.options.getMaxTokens()) {
         	log.warn(p.size()+" message processing may exceed dialog maximum! skipping..");
         	return Optional.empty();

@@ -277,6 +277,12 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	public void addInteraction(ChatFormat chatFormat, ChatFormat.Message invocation, ChatFormat.Message response) {
 		List<ChatFormat.Message[]> segmentedContent = segmentContent(invocation, response);
+		if(DEBUG) {
+			log.info("$$$ Segmented content size="+segmentedContent.size());
+			for(int i = 0; i < segmentedContent.size(); i++) {
+				log.info(i+".) A="+segmentedContent.get(i)[0].content()+"\r\nB="+segmentedContent.get(i)[1].content());
+			}
+		}
 		for(ChatFormat.Message[] segments : segmentedContent) {
 			//
 			// add user/asst
@@ -601,7 +607,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// walk over interactions with our insert map ready
 		int contentSize = promptFrame.content().length();
 		listCtr = 0;
-		loopExit: while (listCtr < valueList.size()) {
+		while (listCtr < valueList.size()) {
 		    int idx = valueList.get(listCtr);
 		    TimestampRole tsRole = (TimestampRole) ((Result) thetaNearestResults.get(idx)).get(1);
 		    ChatFormat.Message message = (ChatFormat.Message) ((NoIndex) (thetaNearestResults.get(idx)).get(2)).getInstance();
@@ -619,21 +625,23 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        					returnMessages.add(message);
 		        					returnMessages.add(insertMessage.get());
 		        					contentSize = prospective;
-		        					listCtr += 1; // advance past this entry
+		        					++listCtr; // advance past this entry
 		        					continue;     // next iteration
 		        				} else {
-		        					break loopExit;
+		        					returnMessages.add(promptFrame);
+		        					printStats(returnMessages);
+		        					return returnMessages;
 		        				} 
 		        			} else {
 		        				// results contained original user message or message to be inserted already, since
 		        				// we have an insert, skip just this one entry
-		        				listCtr += 1;
+		        				++listCtr;
 		        				continue;
 		        			}
 		        		} else {
 		        			// we found an insert map directive, but then no matching database entry to insert, this indicates bad data sequence
 		        			log.info("NO MATCHING ASSISTANT ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
-		        			listCtr += 1;
+		        			++listCtr;
 		        			continue;
 		        		}
 		        	} else {
@@ -647,10 +655,12 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        		if (prospective < maxAdjustedTokens) {
 		        			returnMessages.add(message);
 		        			contentSize = prospective;
-		        			listCtr += 1;
+		        			++listCtr;
 		        			continue;
 		        		} else {
-		        			break loopExit;
+        					returnMessages.add(promptFrame);
+        					printStats(returnMessages);
+        					return returnMessages;
 		        		}
 		        	}
 		        }
@@ -666,20 +676,22 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        					returnMessages.add(insertMessage.get());
 		        					returnMessages.add(message);
 		        					contentSize = prospective;
-		        					listCtr += 1;
+		        					++listCtr;
 		        					continue;
 		        				} else {
-		        					break loopExit;
+		        					returnMessages.add(promptFrame);
+		        					printStats(returnMessages);
+		        					return returnMessages;
 		        				}
 		        			} else {
 		        				// we found our insert, and checked and found redundancy, so we can skip both
-		        				listCtr += 1;
+		        				++listCtr;
 		        				continue;
 		        			}
 		        		} else {
 		        			// we found an insert map directive, but then no matching database entry to insert, this indicates bad data sequence
 		        			log.info("NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
-		        			listCtr += 1;
+		        			++listCtr;
 		        			continue;
 		        		}
 		        	// no insert, we have to insert ASSISTANT as we may have valid user
@@ -688,16 +700,18 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        		if (prospective < maxAdjustedTokens) {
 		        			returnMessages.add(message);
 		        			contentSize = prospective;
-		        			listCtr += 1;
+		        			++listCtr;
 		        			continue;
 		        		} else {
-		        			break loopExit;
+        					returnMessages.add(promptFrame);
+        					printStats(returnMessages);
+        					return returnMessages;
 		        		}
 		        	}
 		        }
 		        default:
 		            log.error("Unknown role encountered");
-		            listCtr += 1;
+		            ++listCtr;
 		            continue;
 		    }
 		} // end while	
@@ -706,6 +720,10 @@ public final class RelatrixLSH implements Serializable, Comparable {
 									" max:"+maxAdjustedTokens+" # returns="+returnMessages.size());	
 		// put most recent user query last, we already accounted for context size at start of pipeline
 		returnMessages.add(promptFrame);
+		printStats(returnMessages);
+		return returnMessages;
+	}
+	private void printStats(List<ChatFormat.Message> returnMessages) {
 		if(DEBUG) {
 			int ilen = 0;
 			for(int i = 0; i < returnMessages.size(); i++) {
@@ -713,7 +731,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				log.info(i+".) length="+returnMessages.get(i).content().length()+" total="+ilen+" - "+returnMessages.get(i));
 			}
 		}
-		return returnMessages;
 	}
 	/**
 	 * Match the timestap of the insertMap value element to the timestsamp of an element from the parallel query

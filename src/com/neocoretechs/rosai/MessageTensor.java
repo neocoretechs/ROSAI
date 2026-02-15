@@ -90,17 +90,16 @@ public class MessageTensor implements Externalizable, Comparable {
 	/**
 	 * Factory method to create new MessageTensor, allocate listof messages, and apply template
 	 * @param msgs list of dialog messages
-	 * @param addAssistantPrompt true to add blank preemptive assistant section at end of dialog
 	 * @return the String with templated dialog
 	 */
-	public static String applyChatTemplate(List<ChatFormat.Message> msgs, boolean addAssistantPrompt) {
+	public static String applyChatTemplate(List<ChatFormat.Message> msgs) {
 	    // 1. Build llama_chat_message[] in native memory
 	    MessageTensor chatTensor = new MessageTensor();
 	    int totalMsgSize = chatTensor.allocate(msgs); // alloc + fills struct array
 	    // 2. Allocate output buffer
 	    StringTensor out = MessageTensor.allocOutput(totalMsgSize);
 	    int bufLen = out.size();                                 // len
-	    int allocated = DeviceManager.applyChatTemplate(chatTensor, out, msgs.size(), bufLen, addAssistantPrompt);
+	    int allocated = DeviceManager.applyChatTemplate(chatTensor, out, msgs.size(), bufLen);
 	    if(DEBUG)
 	    	log.info("MessageTensor.applyChatTemplate allocated="+allocated);
 	    // 3. Convert UTF8 C string in out.buffer to Java String
@@ -109,14 +108,13 @@ public class MessageTensor implements Externalizable, Comparable {
 	
 	/**
 	 * Method to apply template to allocated list of Messages
-	 * @param addAssistantPrompt true to add blank preemptive assistant section at end of dialog
 	 * @return the StringTensor with templated dialog
 	 */
-	public StringTensor applyChatTemplate(boolean addAssistantPrompt) {
+	public StringTensor applyChatTemplate() {
 	    // 2. Allocate output buffer
 	    StringTensor out = MessageTensor.allocOutput(this.totalMessageSize);
 	    int bufLen = out.size();
-	    int allocated = DeviceManager.applyChatTemplate(this, out, this.totalMessages, bufLen, addAssistantPrompt);
+	    int allocated = DeviceManager.applyChatTemplate(this, out, this.totalMessages, bufLen);
 	    if(DEBUG)
 		    log.info(this.getClass().getName()+".applyChatTemplate allocated="+allocated);
 	    // 3. Convert UTF8 C string in out.buffer to Java String

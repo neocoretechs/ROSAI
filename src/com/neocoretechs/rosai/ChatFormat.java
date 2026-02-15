@@ -101,7 +101,7 @@ public class ChatFormat implements Serializable {
 	 */
 	public List<Integer> encodeDialogPrompt(boolean appendAssistantTurn, List<ChatFormat.Message> dialog) {
 		MessageTensor mt = new MessageTensor(dialog);
-		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
+		StringTensor st = mt.applyChatTemplate();
 		String resStr = st.toString();
 		if(DEBUG)
 			log.info("ChatFormat.encodeDialogPrompt="+resStr);
@@ -109,13 +109,12 @@ public class ChatFormat implements Serializable {
 	}
 	/**
 	 * Encode list of supplied messages into dialog text in StringTensor, applying chat templates
-	 * @param appendAssistantTurn appendAssistantTurn true to add a blank ASSISTANT header at the end of the list of prompts
 	 * @param dialog list of messages to process
 	 * @return the StringTensor of templatized messages
 	 */
-	public StringTensor extractDialogPrompt(boolean appendAssistantTurn, List<Message> dialog) {
+	public StringTensor extractDialogPrompt(List<Message> dialog) {
 		MessageTensor mt = new MessageTensor(dialog);
-		StringTensor st = mt.applyChatTemplate(appendAssistantTurn);
+		StringTensor st = mt.applyChatTemplate();
 		if(DEBUG)
 			log.info("ChatFormat.extractDialogPrompt="+st.toString());
 		return st;
@@ -158,11 +157,10 @@ public class ChatFormat implements Serializable {
 			tr.add(this);
 			return chatFormat.encodeDialogPrompt(appendAssistant, tr);
 		}
-		public String applyChatTemplate() { return applyChatTemplate(false); }
-		public String applyChatTemplate(boolean appendAssistant) {
+		public String applyChatTemplate() {
 			ArrayList<Message> tr = new ArrayList<Message>(1);
 			tr.add(this);
-			return MessageTensor.applyChatTemplate(tr, appendAssistant);
+			return MessageTensor.applyChatTemplate(tr);
 		}
 	}
 	
