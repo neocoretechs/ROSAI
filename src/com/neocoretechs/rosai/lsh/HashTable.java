@@ -42,7 +42,7 @@ import com.neocoretechs.rosai.Parallel;
 final class HashTable implements Serializable {
 	private static final Log log = LogFactory.getLog(HashTable.class);
 	private static final long serialVersionUID = -5410017645908038641L;
-	private static boolean DEBUG = true;
+	private static boolean DEBUG = false;
 	/**
 	 * Contains the mapping between a combination of a number of hashes (encoded
 	 * using an integer) and a list of possible nearest neighbours

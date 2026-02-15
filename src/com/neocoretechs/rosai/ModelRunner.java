@@ -1,16 +1,3 @@
-/**
- * COMPILE_OPTIONS --add-modules=jdk.incubator.vector <br>
- * RUNTIME_OPTIONS --add-modules=jdk.incubator.vector -Djdk.incubator.vector.VECTOR_ACCESS_OOB_CHECK=0 <br>
- * <p>
- * Practical inference in Java, with help. <o>
- * Supports llama.cpp's GGUF format. <p>
- * Multi-threaded matrix vector multiplication routines implemented using Java's Vector API. <p>
- * Accepts commands from RosJavaLite bus topics, including sensors and status, and fuses those
- * into coherent responses to perform embodied field robotics. Derived from Oracle model runner.
- * Uses LSH indexing and semantic retrieval to provide virtually unlimited context with semantic augmentation.<p>
- * Remember: Llama models use GPT2 vocabulary while non-Llama models use Llama vocabulary!
- * @author Jonathan Groff Copyright (C) NeoCoreTechs 2025
- */
 package com.neocoretechs.rosai;
 
 import stereo_msgs.StereoImage;
@@ -60,6 +47,7 @@ import org.json.JSONObject;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.parallel.SynchronizedThreadManager;
 import com.neocoretechs.rocksack.TransactionId;
+import com.neocoretechs.rosai.ChatFormat.Role;
 import com.neocoretechs.rosai.contentprocessor.ContentParser;
 import com.neocoretechs.rosai.ffi.NativeLoader;
 import com.neocoretechs.rosai.parametertree.TreeManager;
@@ -214,8 +202,8 @@ public class ModelRunner extends AbstractNodeMain {
 				List<Integer> promptTokens = new ArrayList<>();
 				//promptTokens.add(chatFormat.getBeginOfText());
 				List<ChatFormat.Message> prompts = SystemPrompts.getSystemMessages(chatFormat);
-				promptTokens.addAll(chatFormat.encodeDialogPrompt(false, prompts));
-				Optional<String> response = processMessage(chatFormat, promptTokens);
+				promptTokens.addAll(chatFormat.encodeDialogPrompt(prompts));
+				Optional<String> response = processMessage(chatFormat, ChatFormat.Role.SYSTEM, promptTokens);
 				if(response.isPresent() && response.get().length() > 0) {
 					if(DEBUG)
 						log.info("***Queueing from system preamble:"+response.get());
@@ -369,18 +357,13 @@ public class ModelRunner extends AbstractNodeMain {
 						e.printStackTrace();
 						responses = new ArrayList<ChatFormat.Message>();
 					}
-					if(DEBUG) {
-						StringBuilder sb = new StringBuilder("Response Messages from findNearest pre-ChatTemplate:\n");
-						for(int i = 0; i < responses.size(); i++) {
-							sb.append(i);
-							sb.append(".) ");
-							sb.append(responses.get(i));
-							sb.append("\n");
-						}
-						log.info(sb.toString());
-					}
+					//if(DEBUG) {
+					//	RelatrixLSH.printStats(responses);
+					//}
 					// encode list of messages into proper templated tokenized list, perform forward inference, return optional String response
-					Optional<String> response = processMessage(chatFormat, chatFormat.encodeDialogPrompt(true, responses));
+					// The original prompt is encoded on the end of this list by findNearest
+					//
+					Optional<String> response = processMessage(chatFormat, ChatFormat.Role.USER, chatFormat.encodeDialogPrompt(responses));
 					if(response.isPresent() && response.get().trim().length() > 0) {
 						if(DEBUG)
 							log.info("***Queueing from role:"+chatMessage.role()+" message:"+response.get());
@@ -430,10 +413,11 @@ public class ModelRunner extends AbstractNodeMain {
 	
 	/**
 	 * Present the tokenized prompt and perform forward inference using native Llama.cpp callout. Get back the response token list and process it.
+	 * @param role TODO
 	 * @param promptTokens List of prompt tokens
-	 * @return The dialog as Optional String
+	 * @return The dialog as Optional String encoded as ASSISTANT message then chat template applied
 	 */
-	private Optional<String> processMessage(ChatFormat chatFormat, List<Integer> promptTokens) {
+	private Optional<String> processMessage(ChatFormat chatFormat, Role role, List<Integer> promptTokens) {
 		try {
 			dbLatch.await();
 		} catch (InterruptedException e) {
@@ -442,8 +426,8 @@ public class ModelRunner extends AbstractNodeMain {
  		IntTensor retTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
         List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
-        String userText = DeviceManager.decode(chatFormat, promptTokens);
-        ChatFormat.Message promptMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.USER, userText);
+        String userText = chatFormat.stripFormatting(DeviceManager.decode(chatFormat, promptTokens));
+        ChatFormat.Message promptMessage = new ChatFormat.Message(chatFormat, role, userText);
         dialog.add(promptMessage);
         StringTensor p = chatFormat.extractDialogPrompt(dialog);
         if(p.size() >= Llama3.options.getMaxTokens()) {
@@ -462,7 +446,7 @@ public class ModelRunner extends AbstractNodeMain {
 			return Optional.empty();
 		}
 		List<Integer> retTokenList = retTokens.toList();
-		String cleanString = DeviceManager.decode(chatFormat, retTokenList).trim();
+		String cleanString = chatFormat.stripFormatting(DeviceManager.decode(chatFormat, retTokenList));
 		if(DEBUG)
 			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
 		if(cleanString.length() == 0)
@@ -475,10 +459,10 @@ public class ModelRunner extends AbstractNodeMain {
 	}
 	
 	/**
-	 * Process the given interaction using the role provided, beginning with model.CreateNewState
-	 * and ending with a check for response.isPresent and if so, relatrixLSH.addInteraction, then messageQueue.addLastWait(response).
-	 * @param message The message to process, the response is in ChatFormat.Role.ASSISTANT
-	 * @param role the role context. role is ChatFromat.Role.USER, ChatFromat.Role.SYSTEM, ChatFromat.Role.ASSISTANT
+	 * Translate a raw String into an actual ChatFormat.Message with the given Role and queue it. Make sure its not empty first
+	 * and if the model is not loaded, skip sending it to the incoming message queue.
+	 * @param message The String to process into an actual ChatFormat.Message with the given role
+	 * @param role the role context that the incoming message bound for the incoming message queue will have
 	 */
 	private void processRole(String message, ChatFormat.Role role) {
 		if(!modelLoaded)
@@ -616,7 +600,11 @@ public class ModelRunner extends AbstractNodeMain {
 		}
 		return Optional.of(chatMessage);
 	}
-	
+	/**
+	 * 
+	 * @param cleanString
+	 * @return result of command with chat template applied
+	 */
 	public Optional<String> processOutgoingCommand(String cleanString) {
 		String stripString = chatFormat.stripFormatting(cleanString);
 		ChatFormat.Message responseMessage = null;

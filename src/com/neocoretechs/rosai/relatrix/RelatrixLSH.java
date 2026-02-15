@@ -81,7 +81,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	private TransactionId xid;
 	private int maxTokens;
 	private int maxAdjustedTokens; // tokenized vs character context count estimate
-	private static final float CONTEXT_OVERHEAD_PCT = 0.35f;
+	private static final float CONTEXT_OVERHEAD_PCT = 0.40f;
 	private static final int MAX_DB_CONTENT_SIZE = 2000;
 	private static AtomicLong uniTime = new AtomicLong(System.currentTimeMillis());
 	/**
@@ -300,16 +300,19 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				try {
 					CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_user, noIndex);
 					CompletableFuture<Relation> resA = dbClient.store(xid, combinedHashA, tr_assistant, noIndexA);
-					res.get();
-					resA.get();
-					dbClient.commit(xid); // Only after both store ops succeed
-					if(DEBUG) {
-						log.info("### Successful store:"+combinedHash+" "+tr_user+" "+segments[0].content().length()+"\r\n"+
-								combinedHashA+" "+tr_assistant+" "+segments[1].content().length());
-					}
+					Relation rel1 = res.get();
+					Relation rel2 = resA.get();
+					if(rel1 != null && rel2 != null) // may never return null, but check anyway
+						dbClient.commit(xid); // Only after both store ops succeed
+					else
+						dbClient.rollback(xid);
+					//if(DEBUG) {
+					//	log.info("### Successful store:"+combinedHash+" "+tr_user+" "+segments[0].content().length()+"\r\n"+
+					//			combinedHashA+" "+tr_assistant+" "+segments[1].content().length());
+					//}
 				} catch (InterruptedException | ExecutionException e) {
-					if(DEBUG)
-						log.info("@@@ Failed store:"+combinedHash+" "+tr_user+" "+segments[0].content().length());
+					//if(DEBUG)
+					//	log.info("@@@ Failed store:"+combinedHash+" "+tr_user+" "+segments[0].content().length());
 					dbClient.rollback(xid);
 				}
 			}
@@ -455,6 +458,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	        retEntry[0] = newA;
 	        retEntry[1] = newB;
 	        ret.add(retEntry);
+	        if(DEBUG)
+	        	log.info("segmentContent fill missing ASSISTANT:"+splitPos+" part:"+newA+" remain:"+newB);
 	    }
 	    return ret;
 	}
@@ -715,15 +720,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		            continue;
 		    }
 		} // end while	
-		if(DEBUG)
-			log.info("findNearest "+thetaToNearestMap.values().size()+" original context entries, current nearest="+thetaNearestResults.size()+" content size="+contentSize+
-									" max:"+maxAdjustedTokens+" # returns="+returnMessages.size());	
 		// put most recent user query last, we already accounted for context size at start of pipeline
 		returnMessages.add(promptFrame);
 		printStats(returnMessages);
 		return returnMessages;
 	}
-	private void printStats(List<ChatFormat.Message> returnMessages) {
+	
+	public static void printStats(List<ChatFormat.Message> returnMessages) {
 		if(DEBUG) {
 			int ilen = 0;
 			for(int i = 0; i < returnMessages.size(); i++) {

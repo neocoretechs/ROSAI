@@ -12,6 +12,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -22,7 +23,7 @@ import org.apache.commons.logging.LogFactory;
 public class ChatFormat implements Serializable {
 	private static final long serialVersionUID = 1L;
 	private static final Log log = LogFactory.getLog(ChatFormat.class);
-	public static boolean DEBUG = true;
+	public static boolean DEBUG = false;
 	private transient Set<Integer> stopTokens;
 	private transient int bos;
 	public static String endOfTurn = "<|eot_id|>"; // llama3 specific, overwritten in ctor
@@ -95,11 +96,10 @@ public class ChatFormat implements Serializable {
 	}
 	/**
 	 * Encode list of supplied messages into tokenized List, applying chat templates
-	 * @param appendAssistantTurn true to add a blank ASSISTANT header at the end of the list of prompts
 	 * @param dialog List of messages to tokenize
 	 * @return the tokenized list of templatized messages
 	 */
-	public List<Integer> encodeDialogPrompt(boolean appendAssistantTurn, List<ChatFormat.Message> dialog) {
+	public List<Integer> encodeDialogPrompt(List<ChatFormat.Message> dialog) {
 		MessageTensor mt = new MessageTensor(dialog);
 		StringTensor st = mt.applyChatTemplate();
 		String resStr = st.toString();
@@ -123,12 +123,33 @@ public class ChatFormat implements Serializable {
 	 * Strip Llama3 specific chat template formatting producing unformatted string
 	 * @param input The input STring
 	 * @return the unformatted string
-	 */
+	 
 	public String stripFormatting(String input) {
 		return input.replaceAll("<\\|.*?\\|>", "")
 				.replaceAll("\\*+", "")
 				.replaceAll("(?m)^USER:|AI:", "")
 				.trim();
+	}*/
+
+	public String stripFormatting(String input) {
+	    if (input == null || input.isEmpty()) return input;
+	    // remove explicit endOfTurn marker (safe for special chars)
+	    input = input.replaceAll(Pattern.quote(endOfTurn), "");
+	    // remove any <|...|> style tokens (non-greedy, DOTALL so it works across lines)
+	    input = input.replaceAll("(?s)<\\|.*?\\|>", "");
+	    // build role regex from enum plus alias "AI"
+	    String roles = Stream.of(Role.values())
+	                         .map(Role::getRole)
+	                         .collect(Collectors.joining("|"));
+	    // include AI alias
+	    String rolesRegex = "(?i)^(?:" + roles + "|AI)\\s*:\\s*"; // (?i) = case-insensitive, ^ with multiline below
+	    // remove role labels at start of lines (multiline)
+	    input = input.replaceAll("(?m)" + rolesRegex, "");
+	    // remove markdown asterisks used for emphasis/bold (one or more)
+	    input = input.replaceAll("\\*+", "");
+	    // collapse multiple whitespace to single space and trim
+	    input = input.replaceAll("\\s{2,}", " ").trim();
+	    return input;
 	}
 	/**
 	 * Strip model specific chat template tokens from input
@@ -151,12 +172,22 @@ public class ChatFormat implements Serializable {
 		public String toString() {
 			return String.format("[%s] %s", role, content);
 		}
-		public List<Integer> encode() { return encode(false); }
-		public List<Integer> encode(boolean appendAssistant) {
+		/**
+		 * Creates ArrayList of 1, adds 'this' to it, then calls chatFormat.encodeDialogPrompt
+		 * which encodes list of supplied messages into tokenized List by applying chat templates,
+		 * then extracting the String, then calling DeviceManager.encode to turn it into a list of tokens.
+		 * @return The encoded list of tokens
+		 */
+		public List<Integer> encode() {
 			ArrayList<Message> tr = new ArrayList<Message>(1);
 			tr.add(this);
-			return chatFormat.encodeDialogPrompt(appendAssistant, tr);
+			return chatFormat.encodeDialogPrompt(tr);
 		}
+		/**
+		 * Create an internal ArrayList for 'this' singular message, then send it to MessageTensor.applyChatTemplate.
+		 * @see MessageTensor#applyChatTemplate
+		 * @return The String with chat template applied
+		 */
 		public String applyChatTemplate() {
 			ArrayList<Message> tr = new ArrayList<Message>(1);
 			tr.add(this);

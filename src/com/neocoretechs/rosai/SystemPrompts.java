@@ -18,7 +18,7 @@ import com.neocoretechs.rosai.relatrix.RelatrixLSH;
 
 
 final class SystemPrompts {
-	private static boolean DEBUG = true;
+	private static boolean DEBUG = false;
     public static List<ChatFormat.Message> getSystemMessages(ChatFormat chatFormat) {
         return List.of(
         	system(chatFormat, "You are ROSCAR (Robot Operating System Context Augmented Retrieval). You run as a node in RosJavaLite, "
@@ -70,7 +70,7 @@ final class SystemPrompts {
      */
     public static void frontloadDbFromHtml(RelatrixLSH db, ChatFormat chatFormat, File f) throws Exception {
         String rootSource = f.getAbsolutePath();
-        long baseTs = System.currentTimeMillis();
+        //long baseTs = System.currentTimeMillis();
         // 1) System message for the batch: short, authoritative constraints & provenance
         String systemText = String.join("\n",
             "SOURCE_ROOT: " + rootSource,
