@@ -276,39 +276,38 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @param response response
 	 */
 	public void addInteraction(ChatFormat chatFormat, ChatFormat.Message invocation, ChatFormat.Message response) {
-		//try(Timer _ = Timer.log("addInteraction: SaveState:"+responseTokens.size()+" initiator:"+tr_user.toString())) {
 		List<ChatFormat.Message[]> segmentedContent = segmentContent(invocation, response);
 		for(ChatFormat.Message[] segments : segmentedContent) {
 			//
-			// add user
+			// add user/asst
 			//
 			long baseTime = newUniTime();
 			FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(segments[0].content())));
+			FloatTensor fvecA = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(segments[1].content())));
 			for(int i = 0; i < hashTable.size(); i++) {
 				Integer combinedHash = hash(hashTable.get(i), fvec);
+				Integer combinedHashA = hash(hashTable.get(i), fvecA);
 				TimestampRole tr_user = new TimestampRole(baseTime, segments[0].role());
-				NoIndex noIndex = NoIndex.create(segments[0]);
-				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_user, noIndex);
-				try {
-					res.get();
-				} catch (InterruptedException | ExecutionException e) {}
-			}
-			//
-			// add assistant, timestamp roles must initiators match regardless
-			//
-			fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(segments[1].content())));
-			for(int i = 0; i < hashTable.size(); i++) {
-				Integer combinedHash = hash(hashTable.get(i), fvec);
 				TimestampRole tr_assistant = new TimestampRole(baseTime, ChatFormat.Role.ASSISTANT);
-				NoIndex noIndex = NoIndex.create(segments[1]);
-				CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_assistant, noIndex);
+				NoIndex noIndex = NoIndex.create(segments[0]);
+				NoIndex noIndexA = NoIndex.create(segments[1]);
 				try {
+					CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_user, noIndex);
+					CompletableFuture<Relation> resA = dbClient.store(xid, combinedHashA, tr_assistant, noIndexA);
 					res.get();
-				} catch (InterruptedException | ExecutionException e) {}
+					resA.get();
+					dbClient.commit(xid); // Only after both store ops succeed
+					if(DEBUG) {
+						log.info("### Successful store:"+combinedHash+" "+tr_user+" "+segments[0].content().length()+"\r\n"+
+								combinedHashA+" "+tr_assistant+" "+segments[1].content().length());
+					}
+				} catch (InterruptedException | ExecutionException e) {
+					if(DEBUG)
+						log.info("@@@ Failed store:"+combinedHash+" "+tr_user+" "+segments[0].content().length());
+					dbClient.rollback(xid);
+				}
 			}
 		}
-		dbClient.commit(xid); // Only after both store ops succeed
-		//}
 	}	
 	
 	/**
