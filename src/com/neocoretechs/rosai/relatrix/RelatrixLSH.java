@@ -482,7 +482,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * Try and resolve associated interaction elements that are missing and then interpose those with our
 	 * nearest list, if found. If we cant locate a corresponding interaction element, then skip the entry.<br>
 	 * Our map has a TimestampRole with a matching timestamp and the opposite role used to launch the query.<br>
-	 * @param chatFormat chatFormat instance
 	 * @param promptFrame list of messages to populate starting with initial request
 	 * @return List of retrieved messages
 	 * @throws ExecutionException asychronous database client exception
@@ -492,9 +491,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws ClassNotFoundException asychronous database client exception
 	 * @throws IllegalArgumentException asychronous database client exception
 	 */
-	public List<ChatFormat.Message> findNearest(ChatFormat chatFormat, ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
+	public List<ChatFormat.Message> findNearest(ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> thetaNearestResults = null;
-		List<Integer> promptFrameTokens = chatFormat.stripFormatting(chatFormat.encodeAsList(promptFrame.content()));
+		List<Integer> promptFrameTokens = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(promptFrame.content()));
 		//if(DEBUG)
 		//	log.info("findNearest User query has "+promptFrameTokens.size()+" tokens from "+promptFrame);
 		List<ChatFormat.Message> returnMessages = new ArrayList<ChatFormat.Message>();
@@ -540,7 +539,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			Result thetaNearestResult = thetaNearestResults.get(i);
 			// Original LSH at Result.get(0), TimestampRole at Result.get(1), message at Result.get(2)
 			NoIndex noIndex = (NoIndex) thetaNearestResult.get(2);
-			List<Integer> restensor = chatFormat.stripFormatting(chatFormat.encodeAsList(((ChatFormat.Message)noIndex.getInstance()).content()));
+			List<Integer> restensor = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(((ChatFormat.Message)noIndex.getInstance()).content()));
 			double cosDist;
 			FloatTensor cantensor = normalize(restensor);
 			if(cantensor.size() < fmessage.size())

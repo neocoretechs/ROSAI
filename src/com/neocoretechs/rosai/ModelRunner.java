@@ -47,7 +47,7 @@ import org.json.JSONObject;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.parallel.SynchronizedThreadManager;
 import com.neocoretechs.rocksack.TransactionId;
-import com.neocoretechs.rosai.ChatFormat.Role;
+import com.neocoretechs.rosai.ChatFormat.Message;
 import com.neocoretechs.rosai.contentprocessor.ContentParser;
 import com.neocoretechs.rosai.ffi.NativeLoader;
 import com.neocoretechs.rosai.parametertree.TreeManager;
@@ -199,19 +199,15 @@ public class ModelRunner extends AbstractNodeMain {
 				relatrixLSH = new RelatrixLSH(dbClient, Llama3.options.getMaxTokens());
 				// Chat format seems solely based on individual model, so we extract a name in model loader from Metada general.name
 				// set up the preamble system directives
-				List<Integer> promptTokens = new ArrayList<>();
-				//promptTokens.add(chatFormat.getBeginOfText());
-				List<ChatFormat.Message> prompts = SystemPrompts.getSystemMessages(chatFormat);
-				promptTokens.addAll(chatFormat.encodeDialogPrompt(prompts));
-				Optional<String> response = processMessage(chatFormat, ChatFormat.Role.SYSTEM, promptTokens);
-				if(response.isPresent() && response.get().length() > 0) {
+				List<Message> systemMessages = SystemPrompts.getSystemMessages(chatFormat);
+				Optional<Message> response = processMessage(systemMessages);
+				if(response.isPresent()) {
 					if(DEBUG)
 						log.info("***Queueing from system preamble:"+response.get());
-					for(ChatFormat.Message s: prompts) {
-						ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
-						relatrixLSH.addInteraction(chatFormat, s, responseMessage);
+					for(ChatFormat.Message s: systemMessages) {
+						relatrixLSH.addInteraction(chatFormat, s, response.get());
 					}
-					outgoingMessageQueue.addLast(response.get());
+					outgoingMessageQueue.addLast(response.get().content());
 				}
 				// See if we preload DB with interactions
 				if(Llama3.options.preload()) {
@@ -352,7 +348,7 @@ public class ModelRunner extends AbstractNodeMain {
 					List<ChatFormat.Message> responses = null;
 					try {
 						// chatMessage appended to responses
-						responses = relatrixLSH.findNearest(chatFormat, chatMessage);
+						responses = relatrixLSH.findNearest(chatMessage);
 					} catch (IllegalArgumentException | ClassNotFoundException | IllegalAccessException | IOException | InterruptedException | ExecutionException e) {
 						e.printStackTrace();
 						responses = new ArrayList<ChatFormat.Message>();
@@ -363,13 +359,12 @@ public class ModelRunner extends AbstractNodeMain {
 					// encode list of messages into proper templated tokenized list, perform forward inference, return optional String response
 					// The original prompt is encoded on the end of this list by findNearest
 					//
-					Optional<String> response = processMessage(chatFormat, ChatFormat.Role.USER, chatFormat.encodeDialogPrompt(responses));
-					if(response.isPresent() && response.get().trim().length() > 0) {
+					Optional<Message> response = processMessage(responses);
+					if(response.isPresent()) {
 						if(DEBUG)
 							log.info("***Queueing from role:"+chatMessage.role()+" message:"+response.get());
-						ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, response.get());
-						relatrixLSH.addInteraction(chatFormat, chatMessage, responseMessage);
-						outgoingMessageQueue.addLast(response.get());
+						relatrixLSH.addInteraction(chatFormat, chatMessage, response.get());
+						outgoingMessageQueue.addLast(response.get().content());
 					}
 					//try(Timer _ = Timer.log("reset context")) {
 					if(onceThrough)
@@ -412,12 +407,13 @@ public class ModelRunner extends AbstractNodeMain {
 	} // onStart
 	
 	/**
-	 * Present the tokenized prompt and perform forward inference using native Llama.cpp callout. Get back the response token list and process it.
-	 * @param role TODO
-	 * @param promptTokens List of prompt tokens
-	 * @return The dialog as Optional String encoded as ASSISTANT message then chat template applied
+	 * Present the tokenized prompt and perform forward inference using native Llama.cpp callout.
+	 * call ChatFormat.extractDilogPrompt on list of supplied Message prompts. this applies templates.
+	 * Get back the response token list and process it. Strip the formatting.
+	 * @param prompt List of prompt tokens
+	 * @return The dialog as Optional encoded as ASSISTANT message without templates
 	 */
-	private Optional<String> processMessage(ChatFormat chatFormat, Role role, List<Integer> promptTokens) {
+	private Optional<Message> processMessage(List<Message> prompt) {
 		try {
 			dbLatch.await();
 		} catch (InterruptedException e) {
@@ -425,11 +421,7 @@ public class ModelRunner extends AbstractNodeMain {
 		}
  		IntTensor retTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
-        List<ChatFormat.Message> dialog = new ArrayList<ChatFormat.Message>();
-        String userText = chatFormat.stripFormatting(DeviceManager.decode(chatFormat, promptTokens));
-        ChatFormat.Message promptMessage = new ChatFormat.Message(chatFormat, role, userText);
-        dialog.add(promptMessage);
-        StringTensor p = chatFormat.extractDialogPrompt(dialog);
+        StringTensor p = chatFormat.extractDialogPrompt(prompt);
         if(p.size() >= Llama3.options.getMaxTokens()) {
         	log.warn(p.size()+" message processing may exceed dialog maximum! skipping..");
         	return Optional.empty();
@@ -453,9 +445,9 @@ public class ModelRunner extends AbstractNodeMain {
 			return Optional.empty();
 		Optional<String> cmdRes = processOutgoingCommand(cleanString);
 		if(!cmdRes.isEmpty())
-			return cmdRes;
+			cleanString = cmdRes.get();
         ChatFormat.Message responseMessage = new ChatFormat.Message(chatFormat, ChatFormat.Role.ASSISTANT, cleanString);
-		return Optional.ofNullable(responseMessage.applyChatTemplate());
+		return Optional.ofNullable(responseMessage);
 	}
 	
 	/**
