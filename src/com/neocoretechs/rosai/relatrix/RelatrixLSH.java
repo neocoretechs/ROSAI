@@ -80,8 +80,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public AsynchRelatrixClientTransaction dbClient;
 	private TransactionId xid;
 	private int maxTokens;
-	private int maxAdjustedTokens; // tokenized vs character context count estimate
-	private static final float CONTEXT_OVERHEAD_PCT = 0.40f;
 	private static final int MAX_DB_CONTENT_SIZE = 2000;
 	private static AtomicLong uniTime = new AtomicLong(System.currentTimeMillis());
 	/**
@@ -90,7 +88,10 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	private List<CosineHash[]> hashTable;
 	private UUID key;
-
+	
+	static record NearResult(int tokenSize,Result result) {
+	}
+	
 	public RelatrixLSH() {}
 
 	public RelatrixLSH(AsynchRelatrixClientTransaction dbClient, int maxTokens) {
@@ -110,7 +111,6 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		this.key = UUID.randomUUID();
 		this.hashTable = new ArrayList<CosineHash[]>();
 		this.maxTokens = maxTokens;
-		this.maxAdjustedTokens = (int) (maxTokens - (((float)maxTokens) * CONTEXT_OVERHEAD_PCT));
 		for(int i = 0; i < numberOfHashTables; i++) {
 			final CosineHash[] cHash = new CosineHash[numberOfHashes];
 			this.hashTable.add(cHash);
@@ -493,6 +493,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	public List<ChatFormat.Message> findNearest(ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> thetaNearestResults = null;
+		List<Integer> promptTokens = promptFrame.encode();
+		int contentSize = promptTokens.size();
 		List<Integer> promptFrameTokens = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(promptFrame.content()));
 		//if(DEBUG)
 		//	log.info("findNearest User query has "+promptFrameTokens.size()+" tokens from "+promptFrame);
@@ -534,12 +536,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// organize our current Results and find similar relevant entries via cosine similarity
 		// and theta similarity in cosDist.<p>
 		// Build a TreeMap in descending order of cosDist, index into thetaNearestResults.
-		TreeMap<Double, Integer> thetaToNearestMap = new TreeMap<Double, Integer>();
+		TreeMap<Double, NearResult> thetaToNearestMap = new TreeMap<Double, NearResult>();
 		for(int i = 0; i < thetaNearestResults.size(); i++) {
 			Result thetaNearestResult = thetaNearestResults.get(i);
 			// Original LSH at Result.get(0), TimestampRole at Result.get(1), message at Result.get(2)
-			NoIndex noIndex = (NoIndex) thetaNearestResult.get(2);
-			List<Integer> restensor = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(((ChatFormat.Message)noIndex.getInstance()).content()));
+			Message nearestMessage = (Message)(((NoIndex)thetaNearestResult.get(2)).getInstance());
+			List<Integer> nearTensor = promptFrame.chatFormat().encodeAsList(nearestMessage.content());
+			List<Integer> restensor = promptFrame.chatFormat().stripFormatting(nearTensor);
 			double cosDist;
 			FloatTensor cantensor = normalize(restensor);
 			if(cantensor.size() < fmessage.size())
@@ -549,26 +552,26 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			cosDist = Math.acos(cosDist); // radians
 			//if(DEBUG)
 			//	log.info("findNearest retrieved result set nearest size:"+thetaNearestResults.size()+" index "+i+" .) theta="+cosDist+" LSH="+thetaNearestResult.get(0)+"->"+thetaNearestResult.get(1));
-			thetaToNearestMap.put(cosDist, i);
+			thetaToNearestMap.put(cosDist, new NearResult(nearestMessage.encode().size(), thetaNearestResult));
 		}
 		// descending cos similarity order
-		NavigableMap<Double, Integer> nm = thetaToNearestMap.descendingMap();
+		NavigableMap<Double, NearResult> nm = thetaToNearestMap.descendingMap();
 		// flatten to list of descending cos order index into Result set of query TimestampRole->Message
-		List<Integer> valueList = nm.values().stream().collect(Collectors.toList());
+		List<NearResult> valueList = nm.values().stream().collect(Collectors.toList());
 		// list of eventual insertion points into valueList
 		HashMap<Integer, TimestampRole> insertMap = new HashMap<Integer, TimestampRole>();
 		// walk over interactions
 		int listCtr = 0;
 		while(listCtr < valueList.size()) {
-			TimestampRole tsRole = (TimestampRole) ((Result)thetaNearestResults.get(valueList.get(listCtr))).get(1);
+			TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).result().get(1);
 			switch(tsRole.getRole()) {
 			case Role.SYSTEM:
 			case Role.USER:
-				if(listCtr+1 >= valueList.size() || !(((TimestampRole)((Result)thetaNearestResults.get(valueList.get(listCtr+1))).get(1))).getRole().equals(Role.ASSISTANT)) {
+				if(listCtr+1 >= valueList.size() || !(((TimestampRole)(valueList.get(listCtr+1).result().get(1))).getRole().equals(Role.ASSISTANT))) {
 					TimestampRole tsr = new TimestampRole();
 					tsr.setTimestamp(tsRole.getTimestamp());
 					tsr.setRole(Role.ASSISTANT);
-					insertMap.put(valueList.get(listCtr), tsr); //nearest entry is USER, next is NOT ASSISTANT, so set this to look for ASSISTANT
+					insertMap.put(listCtr, tsr); //nearest entry is USER, next is NOT ASSISTANT, so set this to look for ASSISTANT
 					//if(DEBUG)
 					//	log.info("findNearest role USER insert after "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
 					// now advance to next entry
@@ -582,13 +585,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				TimestampRole tsr = new TimestampRole();
 				tsr.setTimestamp(tsRole.getTimestamp());
 				tsr.setRole(Role.USER);
-				insertMap.put(valueList.get(listCtr), tsr); //nearest entry is ASSISTANT, previous was NOT USER or SYSTEM, so set this to look for USER
+				insertMap.put(listCtr, tsr); //nearest entry is ASSISTANT, previous was NOT USER or SYSTEM, so set this to look for USER
 				//if(DEBUG)
 				//	log.info("findNearest role ASSISTANT insert before "+listCtr+" points to nearest:"+valueList.get(listCtr)+" entry:"+tsRole+" for matching "+tsr);
 				++listCtr;
 				break;
 			default:
-				thetaNearestResults.remove(valueList.get(listCtr));
+				valueList.remove(listCtr);
 				log.error("Unknown role encountered");
 				break;
 			}
@@ -609,23 +612,22 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// walk the thetaNearestResults looking for matching insertMap elements
 		// insert messages into output results if context is not full
 		// walk over interactions with our insert map ready
-		int contentSize = promptFrame.content().length();
 		listCtr = 0;
 		while (listCtr < valueList.size()) {
-		    int idx = valueList.get(listCtr);
-		    TimestampRole tsRole = (TimestampRole) ((Result) thetaNearestResults.get(idx)).get(1);
-		    ChatFormat.Message message = (ChatFormat.Message) ((NoIndex) (thetaNearestResults.get(idx)).get(2)).getInstance();
+		    TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).result().get(1);
+		    ChatFormat.Message message = (ChatFormat.Message) ((NoIndex)valueList.get(listCtr).result().get(2)).getInstance();
+		    int prospective = contentSize + valueList.get(listCtr).tokenSize();
 		    switch (tsRole.getRole()) {
 		        case Role.SYSTEM:
 		        case Role.USER: {
-		        	TimestampRole insertMapValue = insertMap.get(idx);
+		        	TimestampRole insertMapValue = insertMap.get(listCtr);
 		        	if (insertMapValue != null) {
 		        		// we have an insert, match insert then move on to next entry
 		        		Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
 		        		if (insertMessage.isPresent()) {
 		        			if(!returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-		        				int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
-		        				if (prospective < maxAdjustedTokens) {
+		        				prospective += contentSize + insertMessage.get().encode().size();
+		        				if (prospective < maxTokens) {
 		        					returnMessages.add(message);
 		        					returnMessages.add(insertMessage.get());
 		        					contentSize = prospective;
@@ -654,9 +656,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        			listCtr += 2;
 		        			continue;
 		        		}
-		        		int prospective = contentSize + message.content().length();
 		        		// insert and move on
-		        		if (prospective < maxAdjustedTokens) {
+		        		if (prospective < maxTokens) {
 		        			returnMessages.add(message);
 		        			contentSize = prospective;
 		        			++listCtr;
@@ -669,13 +670,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        	}
 		        }
 		        case Role.ASSISTANT: {
-		        	TimestampRole insertMapValue = insertMap.get(idx);
+		        	TimestampRole insertMapValue = insertMap.get(listCtr);
 		        	if (insertMapValue != null) {
 		        		Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
 		        		if (insertMessage.isPresent() ) {
 		        			if(!returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-		        				int prospective = contentSize + message.content().length() + insertMessage.get().content().length();
-		        				if (prospective < maxAdjustedTokens) {
+		        				prospective += contentSize + insertMessage.get().encode().size();
+		        				if (prospective < maxTokens) {
 		        					// USER/SYSTEM before ASSISTANT
 		        					returnMessages.add(insertMessage.get());
 		        					returnMessages.add(message);
@@ -700,8 +701,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        		}
 		        	// no insert, we have to insert ASSISTANT as we may have valid user
 		        	} else {
-		        		int prospective = contentSize + message.content().length();
-		        		if (prospective < maxAdjustedTokens) {
+		        		prospective += contentSize + message.encode().size();
+		        		if (prospective < maxTokens) {
 		        			returnMessages.add(message);
 		        			contentSize = prospective;
 		        			++listCtr;
