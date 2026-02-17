@@ -94,6 +94,14 @@ public class ChatFormat implements Serializable {
 	public Set<Integer> getStopTokens() {
 		return stopTokens;
 	}
+	
+	public int length(List<Integer> tokens) {
+		for(int i = tokens.size()-1; i > 0; i--) {
+			if(stopTokens.contains(tokens.get(i)))
+					return i;
+		}
+		return tokens.size();
+	}
 	/**
 	 * Encode list of supplied messages into tokenized List, applying chat templates
 	 * @param dialog List of messages to tokenize

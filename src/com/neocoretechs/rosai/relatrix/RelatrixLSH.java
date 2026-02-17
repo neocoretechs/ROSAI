@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map.Entry;
 import java.util.NavigableMap;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -80,6 +81,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public AsynchRelatrixClientTransaction dbClient;
 	private TransactionId xid;
 	private int maxTokens;
+	private static final float maxTokenOverhead = .30f;
 	private static final int MAX_DB_CONTENT_SIZE = 2000;
 	private static AtomicLong uniTime = new AtomicLong(System.currentTimeMillis());
 	/**
@@ -92,6 +94,15 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	static record NearResult(int tokenSize,Result result) {
 	}
 	
+	private static class ThetaPair {
+	    final double theta;      // angle in radians (smaller = more similar)
+	    final NearResult near;
+	    final int index;         // original index for deterministic tie-break
+	    ThetaPair(double theta, NearResult near, int index) {
+	        this.theta = theta; this.near = near; this.index = index;
+	    }
+	}
+
 	public RelatrixLSH() {}
 
 	public RelatrixLSH(AsynchRelatrixClientTransaction dbClient, int maxTokens) {
@@ -110,7 +121,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		this.numberOfHashTables = numberOfHashTables;
 		this.key = UUID.randomUUID();
 		this.hashTable = new ArrayList<CosineHash[]>();
-		this.maxTokens = maxTokens;
+		this.maxTokens = maxTokens - (int)((float)maxTokens*maxTokenOverhead);
 		for(int i = 0; i < numberOfHashTables; i++) {
 			final CosineHash[] cHash = new CosineHash[numberOfHashes];
 			this.hashTable.add(cHash);
@@ -493,8 +504,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	public List<ChatFormat.Message> findNearest(ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> thetaNearestResults = null;
-		List<Integer> promptTokens = promptFrame.encode();
-		int contentSize = promptTokens.size();
+		int contentSize = promptFrame.chatFormat().length(promptFrame.encode());
 		List<Integer> promptFrameTokens = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(promptFrame.content()));
 		//if(DEBUG)
 		//	log.info("findNearest User query has "+promptFrameTokens.size()+" tokens from "+promptFrame);
@@ -502,7 +512,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		FloatTensor fmessage = normalize(promptFrameTokens);
 		thetaNearestResults = queryParallel(fmessage);
 		if(DEBUG)
-			log.info("findNearest Retrieved "+thetaNearestResults.size()+" entries from LSH index query.");
+			log.info("Retrieved "+thetaNearestResults.size()+" entries from LSH index query.");
 		// If we retrieved nothing from semantic query of initial message, try getting last timestamp
 		if(thetaNearestResults.isEmpty()) {
 			//return results;
@@ -525,7 +535,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				if(thetaNearestResults.isEmpty()) {
 					returnMessages.add(promptFrame);
 					if(DEBUG)
-						log.info("findNearest Early return with original prompt...");
+						log.info("Early return with original prompt...");
 					return returnMessages;
 				}
 			}
@@ -535,29 +545,36 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// fmessage is our original message, mormalized as FloatTensor<p>
 		// organize our current Results and find similar relevant entries via cosine similarity
 		// and theta similarity in cosDist.<p>
-		// Build a TreeMap in descending order of cosDist, index into thetaNearestResults.
-		TreeMap<Double, NearResult> thetaToNearestMap = new TreeMap<Double, NearResult>();
-		for(int i = 0; i < thetaNearestResults.size(); i++) {
-			Result thetaNearestResult = thetaNearestResults.get(i);
-			// Original LSH at Result.get(0), TimestampRole at Result.get(1), message at Result.get(2)
-			Message nearestMessage = (Message)(((NoIndex)thetaNearestResult.get(2)).getInstance());
-			List<Integer> nearTensor = promptFrame.chatFormat().encodeAsList(nearestMessage.content());
-			List<Integer> restensor = promptFrame.chatFormat().stripFormatting(nearTensor);
-			double cosDist;
-			FloatTensor cantensor = normalize(restensor);
-			if(cantensor.size() < fmessage.size())
-				cosDist = fmessage.dot(0, cantensor, 0, cantensor.size());
-			else
-				cosDist = cantensor.dot(0, fmessage, 0, fmessage.size());
-			cosDist = Math.acos(cosDist); // radians
-			//if(DEBUG)
-			//	log.info("findNearest retrieved result set nearest size:"+thetaNearestResults.size()+" index "+i+" .) theta="+cosDist+" LSH="+thetaNearestResult.get(0)+"->"+thetaNearestResult.get(1));
-			thetaToNearestMap.put(cosDist, new NearResult(nearestMessage.encode().size(), thetaNearestResult));
+		// Build a Map in order of cosDist, index into thetaNearestResults.
+		// Compute and keep top K most theta-similar (smallest theta)
+		int K = thetaNearestResults.size(); // or limit to top-K if you want
+		List<ThetaPair> scored = new ArrayList<>(K);
+		for (int i = 0; i < K; i++) {
+		    Result thetaNearestResult = thetaNearestResults.get(i);
+		    Message nearestMessage = (Message) (((NoIndex) thetaNearestResult.get(2)).getInstance());
+		    List<Integer> restensor = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(nearestMessage.content()));
+		    FloatTensor cantensor = normalize(restensor);
+		    // compute dot safely for the overlapping length
+		    int n = Math.min(fmessage.size(), cantensor.size());
+		    double dot = 0.0;
+		    for (int j = 0; j < n; j++) {
+		        dot += fmessage.getFloat(j) * cantensor.getFloat(j);
+		    }
+		    // clamp to avoid NaN from acos
+		    dot = Math.max(-1.0, Math.min(1.0, dot));
+		    double theta = Math.acos(dot); // angle in radians, smaller = more similar
+		    int encodedLen = promptFrame.chatFormat().length(nearestMessage.encode());
+		    NearResult nr = new NearResult(encodedLen, thetaNearestResult);
+		    scored.add(new ThetaPair(theta, nr, i));
 		}
-		// descending cos similarity order
-		NavigableMap<Double, NearResult> nm = thetaToNearestMap.descendingMap();
-		// flatten to list of descending cos order index into Result set of query TimestampRole->Message
-		List<NearResult> valueList = nm.values().stream().collect(Collectors.toList());
+		// stable sort by theta ascending (most similar first), tie-break by original index
+		scored.sort((a, b) -> {
+		    int c = Double.compare(a.theta, b.theta); // ascending
+		    if (c != 0) return c;
+		    return Integer.compare(a.index, b.index);
+		});
+		// flatten to list of NearResult in most-similar-first order
+		List<NearResult> valueList = scored.stream().map(p -> p.near).collect(Collectors.toList());
 		// list of eventual insertion points into valueList
 		HashMap<Integer, TimestampRole> insertMap = new HashMap<Integer, TimestampRole>();
 		// walk over interactions
@@ -567,7 +584,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			switch(tsRole.getRole()) {
 			case Role.SYSTEM:
 			case Role.USER:
-				if(listCtr+1 >= valueList.size() || !(((TimestampRole)(valueList.get(listCtr+1).result().get(1))).getRole().equals(Role.ASSISTANT))) {
+				if(listCtr+1 >= valueList.size() || 
+					!(((TimestampRole)(valueList.get(listCtr+1).result().get(1))).getRole().equals(Role.ASSISTANT)) ||
+					!(((TimestampRole)(valueList.get(listCtr+1).result().get(1))).getTimestamp().equals(tsRole.getTimestamp()))) {
 					TimestampRole tsr = new TimestampRole();
 					tsr.setTimestamp(tsRole.getTimestamp());
 					tsr.setRole(Role.ASSISTANT);
@@ -581,7 +600,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 					listCtr+=2;
 				break;
 			case Role.ASSISTANT:
-				// role is assistant without previous USER or SYSTEM, otherwise we would have skipped this entry
+				// role is assistant without previous valid USER or SYSTEM (matching timestamp), otherwise we would have skipped this entry
 				TimestampRole tsr = new TimestampRole();
 				tsr.setTimestamp(tsRole.getTimestamp());
 				tsr.setRole(Role.USER);
@@ -596,130 +615,112 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				break;
 			}
 		}
-		//if(DEBUG)
-		//	log.info("findNearest insert map size:"+insertMap.size());
+		if(DEBUG)
+			log.info("insert map size:"+insertMap.size());
 		// Now we have our insertMap so process those performing another parallel query
 		// to try and resolve associated interaction elements that are missing and then interpose those with our
 		// nearest list, if found. If we cant locate a corresponding interaction element, then skip the entry.
 		// Our map has a TimestampRole with a matching timestamp and the opposite role used to launch the query.
 		List<Object> timestampRoleQuery = new ArrayList<Object>(insertMap.values());
-		//if(DEBUG)
-		//	log.info("findNearest timestampRoleQuery size:"+timestampRoleQuery.size());
 		List<Result> timestampRoleResult = null;
 		if(!timestampRoleQuery.isEmpty()) {
 			timestampRoleResult = queryParallelMap(timestampRoleQuery);
 		}
-		// walk the thetaNearestResults looking for matching insertMap elements
-		// insert messages into output results if context is not full
-		// walk over interactions with our insert map ready
+		if(DEBUG)
+			log.info("timestampRoleResult size:"+timestampRoleResult.size());
+		// walk the NearResults looking for matching insertMap elements
+		// insert Results into original valueList in correct order, calculating size of token list for each new element
+		// walk over interactions with our insert map
 		listCtr = 0;
+		mainLoop:
 		while (listCtr < valueList.size()) {
 		    TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).result().get(1);
-		    ChatFormat.Message message = (ChatFormat.Message) ((NoIndex)valueList.get(listCtr).result().get(2)).getInstance();
-		    int prospective = contentSize + valueList.get(listCtr).tokenSize();
 		    switch (tsRole.getRole()) {
 		        case Role.SYSTEM:
-		        case Role.USER: {
+		        case Role.USER:
 		        	TimestampRole insertMapValue = insertMap.get(listCtr);
-		        	if (insertMapValue != null) {
+		        	if(insertMapValue != null) {
 		        		// we have an insert, match insert then move on to next entry
-		        		Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
-		        		if (insertMessage.isPresent()) {
-		        			if(!returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-		        				prospective += contentSize + insertMessage.get().encode().size();
-		        				if (prospective < maxTokens) {
-		        					returnMessages.add(message);
-		        					returnMessages.add(insertMessage.get());
-		        					contentSize = prospective;
-		        					++listCtr; // advance past this entry
-		        					continue;     // next iteration
-		        				} else {
-		        					returnMessages.add(promptFrame);
-		        					printStats(returnMessages);
-		        					return returnMessages;
-		        				} 
-		        			} else {
-		        				// results contained original user message or message to be inserted already, since
-		        				// we have an insert, skip just this one entry
-		        				++listCtr;
-		        				continue;
-		        			}
+		        		Optional<Result> insertMessage = matchTimestamp(timestampRoleResult, insertMapValue);
+		        		if(insertMessage.isPresent()) {
+		        			Result resultA = insertMessage.get();
+		        			Message resultMessageA = (Message) ((NoIndex)(resultA.get(resultA.length()-1))).getInstance();
+		        			int tokenSize = promptFrame.chatFormat().length(resultMessageA.encode());
+		        			NearResult resultU = valueList.get(listCtr);
+		        			Message resultMessageU = (Message) ((NoIndex)(resultU.result.get(resultU.result.length()-1))).getInstance();
+		        		    int prospect = contentSize + resultU.tokenSize + tokenSize; // contentSize of prompt way up at the beginning
+		        		    if(prospect < maxTokens) {
+		        		    	contentSize = prospect;
+		        		        returnMessages.add(resultMessageU);
+		        		        returnMessages.add(resultMessageA);
+		        		    } else
+		        		    	break mainLoop;
 		        		} else {
 		        			// we found an insert map directive, but then no matching database entry to insert, this indicates bad data sequence
-		        			log.info("NO MATCHING ASSISTANT ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
-		        			++listCtr;
-		        			continue;
+		        			log.info(">> DATABASE INCONSISTENCY: NO MATCHING ASSISTANT ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
 		        		}
-		        	} else {
-		        		// we have no insert, if results already contain user message, skip both this and next assistant
-		        		if (returnMessages.contains(message)) {
-		        			listCtr += 2;
-		        			continue;
-		        		}
-		        		// insert and move on
-		        		if (prospective < maxTokens) {
-		        			returnMessages.add(message);
-		        			contentSize = prospective;
-		        			++listCtr;
-		        			continue;
-		        		} else {
-        					returnMessages.add(promptFrame);
-        					printStats(returnMessages);
-        					return returnMessages;
-		        		}
-		        	}
-		        }
-		        case Role.ASSISTANT: {
-		        	TimestampRole insertMapValue = insertMap.get(listCtr);
+		        	} 
+		        	// move on to next entry
+		        	++listCtr;
+		        	continue;
+		        // we should encounter either a user/system to insert, or have a previous user/system entry
+		        case Role.ASSISTANT:
+		        	insertMapValue = insertMap.get(listCtr);
 		        	if (insertMapValue != null) {
-		        		Optional<ChatFormat.Message> insertMessage = matchInsertMap(insertMapValue, timestampRoleResult);
+		        		Optional<Result> insertMessage = matchTimestamp(timestampRoleResult, insertMapValue);
 		        		if (insertMessage.isPresent() ) {
-		        			if(!returnMessages.contains(insertMessage.get()) && !returnMessages.contains(message)) {
-		        				prospective += contentSize + insertMessage.get().encode().size();
-		        				if (prospective < maxTokens) {
-		        					// USER/SYSTEM before ASSISTANT
-		        					returnMessages.add(insertMessage.get());
-		        					returnMessages.add(message);
-		        					contentSize = prospective;
-		        					++listCtr;
-		        					continue;
-		        				} else {
-		        					returnMessages.add(promptFrame);
-		        					printStats(returnMessages);
-		        					return returnMessages;
-		        				}
-		        			} else {
-		        				// we found our insert, and checked and found redundancy, so we can skip both
-		        				++listCtr;
-		        				continue;
-		        			}
+		        			// USER/SYSTEM before ASSISTANT
+		        			Result resultU = insertMessage.get();
+		        			Message resultMessageU = (Message) ((NoIndex)(resultU.get(resultU.length()-1))).getInstance();
+		        			int tokenSize = promptFrame.chatFormat().length(resultMessageU.encode());
+		        			NearResult resultA = valueList.get(listCtr);
+		        			Message resultMessageA = (Message) ((NoIndex)(resultA.result.get(resultA.result.length()-1))).getInstance();
+		        		    int prospect = contentSize + resultA.tokenSize + tokenSize; // contentSize of prompt way up at the beginning
+		        		    if(prospect < maxTokens) {
+		        		    	contentSize = prospect;
+		        		        returnMessages.add(resultMessageU);
+		        		        returnMessages.add(resultMessageA);
+		        		    } else
+		        		    	break mainLoop;
 		        		} else {
 		        			// we found an insert map directive, but then no matching database entry to insert, this indicates bad data sequence
-		        			log.info("NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
-		        			++listCtr;
-		        			continue;
+		        			log.info(">> DATABASE INCONSISTENCY: NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
 		        		}
-		        	// no insert, we have to insert ASSISTANT as we may have valid user
+		        	// no insert, we have to check valid user/system previous
 		        	} else {
-		        		prospective += contentSize + message.encode().size();
-		        		if (prospective < maxTokens) {
-		        			returnMessages.add(message);
-		        			contentSize = prospective;
-		        			++listCtr;
-		        			continue;
+		        		if(listCtr == 0) {
+		        			log.info(">> DATABASE INCONSISTENCY: NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
 		        		} else {
-        					returnMessages.add(promptFrame);
-        					printStats(returnMessages);
-        					return returnMessages;
-		        		}
+		        			TimestampRole tsRolePrev = (TimestampRole)valueList.get(listCtr-1).result().get(1);
+		        			if((tsRolePrev.getRole().equals(Role.SYSTEM) || tsRolePrev.getRole().equals(Role.USER)) &&
+		        				(tsRolePrev.getTimestamp().equals(tsRole.getTimestamp()))) {
+		        				// previous entry is valid USER/SYSTEM before ASSISTANT
+			        			Result resultU = valueList.get(listCtr-1).result();
+			        			Message resultMessageU = (Message) ((NoIndex)(resultU.get(resultU.length()-1))).getInstance();
+			        			int tokenSize = promptFrame.chatFormat().length(resultMessageU.encode());
+			        			NearResult resultA = valueList.get(listCtr);
+			        			Message resultMessageA = (Message) ((NoIndex)(resultA.result.get(resultA.result.length()-1))).getInstance();
+			        		    int prospect = contentSize + resultA.tokenSize + tokenSize; // contentSize of prompt way up at the beginning
+			        		    if(prospect < maxTokens) {
+			        		    	contentSize = prospect;
+			        		        returnMessages.add(resultMessageU);
+			        		        returnMessages.add(resultMessageA);
+			        		    } else
+			        		    	break mainLoop;
+		        			} else {
+		        				log.info(">> DATABASE INCONSISTENCY: NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
+		        			}
+		        		}     
 		        	}
-		        }
+		        	++listCtr;
+		        	continue;
 		        default:
 		            log.error("Unknown role encountered");
 		            ++listCtr;
 		            continue;
 		    }
-		} // end while	
+		} // end while
+
 		// put most recent user query last, we already accounted for context size at start of pipeline
 		returnMessages.add(promptFrame);
 		printStats(returnMessages);
@@ -729,31 +730,15 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public static void printStats(List<ChatFormat.Message> returnMessages) {
 		if(DEBUG) {
 			int ilen = 0;
+			log.info("--------------- Number of return messages:"+returnMessages.size()+" ---------------");
 			for(int i = 0; i < returnMessages.size(); i++) {
 				ilen += returnMessages.get(i).content().length();
 				log.info(i+".) length="+returnMessages.get(i).content().length()+" total="+ilen+" - "+returnMessages.get(i));
 			}
+			log.info("+++++++++++++++ End of "+returnMessages.size()+" return messages +++++++++++++++");
 		}
 	}
-	/**
-	 * Match the timestap of the insertMap value element to the timestsamp of an element from the parallel query
-	 * by complementary role list. We just match timestamp because roles are complementary so we assume if timestamp
-	 * matches it the corresponding role we were missing from interaction list.
-	 * @param insertMapValue one of the TimestampRole elements we searched for and retrieved in queryParallelMap, assumed not null
-	 * @param timestampRoleResult the result list from queryParallelMap
-	 * @return the optional message that matched timestamp of insertMapValue in timestampRoleResult
-	 */
-	private static Optional<ChatFormat.Message> matchInsertMap(TimestampRole insertMapValue, List<Result> timestampRoleResult) {
-		// If we are going to insert a subsequently retrieved matching entry, calculate its size and add to total
-		ChatFormat.Message insertMessage = null;
-		Optional<Result> r;
-		r = matchTimestamp(timestampRoleResult, insertMapValue);
-		if(r.isPresent()) {
-			Result timeMatch = r.get();
-			insertMessage = (ChatFormat.Message)((NoIndex)timeMatch.get(timeMatch.length()-1)).getInstance();
-		}
-		return Optional.ofNullable(insertMessage);
-	}
+
 	/**
 	 * Match a TimestampRole timestamp with a Result set List element 0 timestamp
 	 * @param source

@@ -422,12 +422,11 @@ public class ModelRunner extends AbstractNodeMain {
  		IntTensor retTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
         StringTensor p = chatFormat.extractDialogPrompt(prompt);
-        if(p.size() >= Llama3.options.getMaxTokens()) {
-        	log.warn(p.size()+" message processing may exceed dialog maximum! skipping..");
-        	return Optional.empty();
+        if(DEBUG) {
+        	log.info(" =============== ModelRunner.processMessage sending dialog to inference: ===============");
+        	log.info(p);
+        	log.info(" =============== ModelRunner.processMessage end dialog to inference: ===============");
         }
-        if(DEBUG)
-        	log.info("ModelRunner.processMessage sending dialog to inference:"+p);
 		//try(Timer _ = Timer.log("run model interactive")) {
 			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
 			if(DEBUG)
@@ -439,8 +438,11 @@ public class ModelRunner extends AbstractNodeMain {
 		}
 		List<Integer> retTokenList = retTokens.toList();
 		String cleanString = chatFormat.stripFormatting(DeviceManager.decode(chatFormat, retTokenList));
-		if(DEBUG)
-			log.info("trimmed prompt="+cleanString+(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString.length()));
+		if(DEBUG) {
+			log.info("<<<<< Returned result of inference:"+cleanString.length());
+			log.info(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString);
+			log.info("End result of inference>>>>>:"+cleanString.length());
+		}
 		if(cleanString.length() == 0)
 			return Optional.empty();
 		Optional<String> cmdRes = processOutgoingCommand(cleanString);

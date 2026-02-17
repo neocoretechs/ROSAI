@@ -115,11 +115,11 @@ public final class DeviceManager {
 		int outLen;
 	    try {
 	        outLen = (int) Llama3.applyChatTemplateMH.invokeExact(
-	            chatSeg,                                         // chat
-	            (long) msgNum,                              // n_msg
-	            false,                              // add_ass
-	            outSeg,                                          // buf
-	            bufLen                                           // len
+	            chatSeg,                         // chat
+	            (long) msgNum,                   // n_msg
+	            true,                            // add_asst
+	            outSeg,                          // buf
+	            bufLen                           // len
 	        );
 	    } catch (Throwable t) {
 	        throw new RuntimeException("apply_chat_template failed", t);
