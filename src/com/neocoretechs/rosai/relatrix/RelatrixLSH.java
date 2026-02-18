@@ -641,7 +641,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        	TimestampRole insertMapValue = insertMap.get(listCtr);
 		        	if(insertMapValue != null) {
 		        		// we have an insert, match insert then move on to next entry
-		        		Optional<Result> insertMessage = matchTimestamp(timestampRoleResult, insertMapValue);
+		        		Optional<Result> insertMessage = matchTimestampRole(timestampRoleResult, insertMapValue);
 		        		if(insertMessage.isPresent()) {
 		        			Result resultA = insertMessage.get();
 		        			Message resultMessageA = (Message) ((NoIndex)(resultA.get(resultA.length()-1))).getInstance();
@@ -667,7 +667,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        case Role.ASSISTANT:
 		        	insertMapValue = insertMap.get(listCtr);
 		        	if (insertMapValue != null) {
-		        		Optional<Result> insertMessage = matchTimestamp(timestampRoleResult, insertMapValue);
+		        		Optional<Result> insertMessage = matchTimestampRole(timestampRoleResult, insertMapValue);
 		        		if (insertMessage.isPresent() ) {
 		        			// USER/SYSTEM before ASSISTANT
 		        			Result resultU = insertMessage.get();
@@ -740,12 +740,12 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	}
 
 	/**
-	 * Match a TimestampRole timestamp with a Result set List element 0 timestamp
+	 * Match a TimestampRole timestamp with a Result set List element 0 timestamp and role
 	 * @param source
 	 * @param target
 	 * @return the matching Result set with timetampRole and any additional retrieved elements
 	 */
-	private static Optional<Result> matchTimestamp(List<Result> source, TimestampRole target) {
+	private static Optional<Result> matchTimestampRole(List<Result> source, TimestampRole target) {
 		Optional<Result> res = Optional.empty();
 		for(Result queryResult: source) {
 			TimestampRole timestampQueryResult = (TimestampRole) queryResult.get(0);
@@ -753,7 +753,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			//	log.info("findNearest.matchTimestamp timestampQueryResult="+timestampQueryResult+" target="+target+" queryResult="+queryResult);
 			//String stime1 = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampQueryResult.getTimestamp()), ZoneId.systemDefault()).toString();
 			//String stime2 = LocalDateTime.ofInstant(Instant.ofEpochMilli(target.getTimestamp()), ZoneId.systemDefault()).toString();
-			if(timestampQueryResult.getTimestamp().longValue() == target.getTimestamp().longValue()) {
+			if(timestampQueryResult.getRole().equals(target.getRole()) &&
+				timestampQueryResult.getTimestamp().longValue() == target.getTimestamp().longValue()) {
 				res = Optional.ofNullable(queryResult);
 				break;
 			}

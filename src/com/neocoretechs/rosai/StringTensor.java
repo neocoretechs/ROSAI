@@ -30,7 +30,9 @@ public final class StringTensor implements Externalizable, Comparable {
 	public StringTensor(byte[] b) {
 		copy(b);
 	}
-
+	public StringTensor(int i) {
+		allocate(i);
+	}
 	public Arena getArena() {
 		return Llama3.sharedArena;
 	}
@@ -39,21 +41,21 @@ public final class StringTensor implements Externalizable, Comparable {
 		return s.getBytes(StandardCharsets.UTF_8);
 	}
 	public void allocate(String s) {
-		allocate(getUTF8(s));
+		copy(getUTF8(s));
 	}
 	/**
 	 * Allocate the byte buffer, adding one for null terminator
 	 * @param utf8Bytes
 	 */
-	public void allocate(byte[] utf8Bytes) {
-		memorySegment = getArena().allocate(utf8Bytes.length + 1);
+	public void allocate(int utf8Bytes) {
+		memorySegment = getArena().allocate(utf8Bytes + 1);
 	}
 	/**
 	 * Copy the byte buffer, adding one for null terminator
 	 * @param utf8Bytes
 	 */
 	public void copy(byte[] utf8Bytes) {
-		allocate(utf8Bytes);
+		allocate(utf8Bytes.length);
 		memorySegment.copyFrom(MemorySegment.ofArray(utf8Bytes));
 		memorySegment.set(ValueLayout.JAVA_BYTE, utf8Bytes.length, (byte)0); // null terminator
 	}

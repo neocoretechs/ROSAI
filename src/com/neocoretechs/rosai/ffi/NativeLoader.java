@@ -106,7 +106,7 @@ public final class NativeLoader {
 		        						ValueLayout.JAVA_FLOAT, // temp
 		        						ValueLayout.JAVA_FLOAT, // mip_p
 		        						ValueLayout.JAVA_FLOAT, // top_p
-		        						ValueLayout.JAVA_LONG // IntTensor return tokens
+		        						ValueLayout.JAVA_LONG // StringTensor return result string
 		        						) // StringTensor return dialog uint8_t* tensor, or uint8_t** ArrayTensor
 		    );
 		if(DEBUG) log.info("run_model:"+Llama3.runModelMH);
@@ -117,7 +117,8 @@ public final class NativeLoader {
 		        						ValueLayout.JAVA_FLOAT, // temp
 		        						ValueLayout.JAVA_FLOAT, // mip_p
 		        						ValueLayout.JAVA_FLOAT, // top_p
-		        						ValueLayout.JAVA_LONG // IntTensor return tokens
+		        						ValueLayout.JAVA_LONG, // IntTensor return tokens
+		        						ValueLayout.JAVA_INT // max tokens
 		        						) // StringTensor return dialog uint8_t* tensor, or uint8_t** ArrayTensor
 		    );
 		if(DEBUG) log.info("run_model_tokenize:"+Llama3.runModelTokenizeMH);

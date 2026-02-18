@@ -73,7 +73,7 @@ public class ChatFormat implements Serializable {
 			//System.out.println("eot="+endOfTurn+" eos="+endOfSentence);
 			IntTensor ieot = new IntTensor(new int[] {endOfTurnTok});
 			StringTensor out = new StringTensor();
-			out.allocate(new byte[Llama3.options.getMaxTokens()]);
+			out.allocate(Llama3.options.getMaxTokens());
 			int siz = DeviceManager.tokenToString(ieot, 1, out);
 			endOfTurn = out.toString();
 			//System.out.println("endOfTurn siz="+siz+" out="+out.toString()+" out len ="+out.toString().length());
@@ -108,9 +108,10 @@ public class ChatFormat implements Serializable {
 	 * @return the tokenized list of templatized messages
 	 */
 	public List<Integer> encodeDialogPrompt(List<ChatFormat.Message> dialog) {
-		MessageTensor mt = new MessageTensor(dialog);
-		StringTensor st = mt.applyChatTemplate();
-		String resStr = st.toString();
+		//MessageTensor mt = new MessageTensor(dialog);
+		//StringTensor st = mt.applyChatTemplate();
+		//String resStr = st.toString();
+		String resStr = MessageTensor.applyChatTemplate(dialog);
 		if(DEBUG)
 			log.info("ChatFormat.encodeDialogPrompt="+resStr);
 		return DeviceManager.encode(resStr);
@@ -121,8 +122,8 @@ public class ChatFormat implements Serializable {
 	 * @return the StringTensor of templatized messages
 	 */
 	public StringTensor extractDialogPrompt(List<Message> dialog) {
-		MessageTensor mt = new MessageTensor(dialog);
-		StringTensor st = mt.applyChatTemplate();
+		//MessageTensor mt = new MessageTensor(dialog);
+		StringTensor st = new StringTensor(MessageTensor.applyChatTemplate(dialog));
 		if(DEBUG)
 			log.info("ChatFormat.extractDialogPrompt="+st.toString());
 		return st;

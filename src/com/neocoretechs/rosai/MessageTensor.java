@@ -23,7 +23,7 @@ import org.apache.commons.logging.LogFactory;
  */
 public class MessageTensor implements Externalizable, Comparable {
 	private static final Log log = LogFactory.getLog(MessageTensor.class);
-	public static boolean DEBUG = false;
+	public static boolean DEBUG = true;
 	MemorySegment memorySegment;
 	private int totalMessageSize;
 	private int totalMessages;
@@ -103,23 +103,9 @@ public class MessageTensor implements Externalizable, Comparable {
 	    if(DEBUG)
 	    	log.info("MessageTensor.applyChatTemplate allocated="+allocated);
 	    // 3. Convert UTF8 C string in out.buffer to Java String
-	    return out.toString();
+	    return out.toString().trim()+ChatFormat.endOfTurn;
 	}
 	
-	/**
-	 * Method to apply template to allocated list of Messages
-	 * @return the StringTensor with templated dialog
-	 */
-	public StringTensor applyChatTemplate() {
-	    // 2. Allocate output buffer
-	    StringTensor out = MessageTensor.allocOutput(this.totalMessageSize);
-	    int bufLen = out.size();
-	    int allocated = DeviceManager.applyChatTemplate(this, out, this.totalMessages, bufLen);
-	    if(DEBUG)
-		    log.info(this.getClass().getName()+".applyChatTemplate allocated="+allocated);
-	    // 3. Convert UTF8 C string in out.buffer to Java String
-	    return out;
-	}
 	
 	public Arena getArena() {
 		return Llama3.sharedArena;

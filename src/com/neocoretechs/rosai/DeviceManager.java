@@ -14,7 +14,7 @@ import org.apache.commons.logging.LogFactory;
  */
 public final class DeviceManager {
 	private static final Log log = LogFactory.getLog(DeviceManager.class);
-	private static boolean DEBUG = false;
+	private static boolean DEBUG = true;
 
 	public static void loadModel(StringTensor model, int contextSize) {
 		MemorySegment hostSeg = model.getSegment();
@@ -25,7 +25,7 @@ public final class DeviceManager {
 			throw new RuntimeException(e);
 		}
 	}
-	public static int runModel(StringTensor prompt, float temp, float min_p, float top_p, IntTensor returnTokens) {
+	public static int runModel(StringTensor prompt, float temp, float min_p, float top_p, StringTensor returnTokens) {
 		MemorySegment hostSeg = prompt.getSegment();
 		long addr = hostSeg.address();
 		MemorySegment tokSegment = returnTokens.getSegment();
@@ -36,13 +36,15 @@ public final class DeviceManager {
 			throw new RuntimeException(e);
 		}
 	}
-	public static int runModelTokenize(StringTensor prompt, float temp, float min_p, float top_p, IntTensor returnTokens) {
+	public static int runModelTokenize(StringTensor prompt, float temp, float min_p, float top_p, IntTensor returnTokens, int max) {
 		MemorySegment hostSeg = prompt.getSegment();
+		if(DEBUG)
+			log.info("prompt length:"+hostSeg.byteSize());
 		long addr = hostSeg.address();
 		MemorySegment tokSegment = returnTokens.getSegment();
 		long addr2 = tokSegment.address();
 		try {
-			return (int) Llama3.runModelTokenizeMH.invokeExact(addr, temp, min_p, top_p, addr2);
+			return (int) Llama3.runModelTokenizeMH.invokeExact(addr, temp, min_p, top_p, addr2, max);
 		} catch (Throwable e) {
 			throw new RuntimeException(e);
 		}

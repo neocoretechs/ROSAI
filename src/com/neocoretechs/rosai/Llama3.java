@@ -78,7 +78,7 @@ public class Llama3 {
         		int tokNum = 0;
         		IntTensor retTokens = IntTensor.allocate(options.getMaxTokens());
         		//try(Timer _ = Timer.log("run model interactive")) {
-        			tokNum = DeviceManager.runModelTokenize(p, options.temperature(), options.minp(), options.topp(), retTokens);
+        			tokNum = DeviceManager.runModelTokenize(p, options.temperature(), options.minp(), options.topp(), retTokens, options.getMaxTokens());
         			System.out.println("Returned Tokens="+tokNum);
         		//}
         		if(tokNum == -1) {
@@ -95,7 +95,7 @@ public class Llama3 {
         } else {
         	StringTensor p = new StringTensor(options.prompt());
     		System.out.println("prompt:"+p);
-    		IntTensor it = IntTensor.allocate(2048);
+    		StringTensor it = new StringTensor(2048);
     		//try(Timer _ = Timer.log("run model")) {
     			int tokNum = DeviceManager.runModel(p, options.temperature(), options.minp(), options.topp(), it);
     			System.out.println("Tokens="+tokNum);
