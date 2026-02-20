@@ -280,11 +280,19 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		return new F32FloatTensor(size, MemorySegment.ofArray(floats));
 	}
 	/**
-	 * Add the user/assistant interaction. Generates either commit or rollback on duplicate key.
-	 * @param chatFormat 
+	 * Add the user/assistant interaction. Generates either commit or rollback on duplicate key for the combined interaction.
+	 * Creates a single NoIndex for each segmented context chunk. Chunks are segmented to fit into the database such
+	 * that they are retrieved in semantic blocks that fit the context without overflowing any single retrieval.
+	 * Each segmented chunk is created with NoIndex and stored repeatedly with all the possible LSH indexes.
+	 * The chunks are then reassembled on retrieval. The segments are made to resemble artificial user/assistant
+	 * interactions for each chunk. In this manner they can be retrieved as part of the normal pipeline and are given
+	 * finer semantic granularity, albeit at the possible loss of some information content. The idea is that we are not
+	 * shooting for complete information retrieval but semantic relevance in priming the context with as much relevant data as possible
+	 * without overflowing and losing the plot entirely.
+	 * @param chatFormat The chatFormat
 	 * @param initiator the initiator of the interaction; either USER or SYSTEM
-	 * @param invocation
-	 * @param response response
+	 * @param invocation the user prompt
+	 * @param response response the model retort
 	 */
 	public void addInteraction(ChatFormat chatFormat, ChatFormat.Message invocation, ChatFormat.Message response) {
 		List<ChatFormat.Message[]> segmentedContent = segmentContent(invocation, response);
@@ -298,16 +306,16 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			//
 			// add user/asst
 			//
+			NoIndex noIndex = NoIndex.create(segments[0]);
+			NoIndex noIndexA = NoIndex.create(segments[1]);
 			long baseTime = newUniTime();
 			FloatTensor fvec = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(segments[0].content())));
 			FloatTensor fvecA = normalize(chatFormat.stripFormatting(chatFormat.encodeAsList(segments[1].content())));
+			TimestampRole tr_user = new TimestampRole(baseTime, segments[0].role());
+			TimestampRole tr_assistant = new TimestampRole(baseTime, ChatFormat.Role.ASSISTANT);
 			for(int i = 0; i < hashTable.size(); i++) {
 				Integer combinedHash = hash(hashTable.get(i), fvec);
 				Integer combinedHashA = hash(hashTable.get(i), fvecA);
-				TimestampRole tr_user = new TimestampRole(baseTime, segments[0].role());
-				TimestampRole tr_assistant = new TimestampRole(baseTime, ChatFormat.Role.ASSISTANT);
-				NoIndex noIndex = NoIndex.create(segments[0]);
-				NoIndex noIndexA = NoIndex.create(segments[1]);
 				try {
 					CompletableFuture<Relation> res = dbClient.store(xid, combinedHash, tr_user, noIndex);
 					CompletableFuture<Relation> resA = dbClient.store(xid, combinedHashA, tr_assistant, noIndexA);
@@ -331,10 +339,17 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	}	
 	
 	/**
-	 * Segment the content into chunks of monotonically increasing TimestampRole to allow more progressive increase of context size
-	 * the recursively call addInteraction until size decreases below threshold
+	 * Segment the content into chunks of monotonically increasing TimestampRole to allow more progressive increase of context size,
+	 * then produce a list of Message arrays (user/asst interactions) call addInteraction until size decreases below threshold. We favor segmentation on boundaries of:
+	 * period <br>
+	 * return <br>
+	 * space <br>
+	 * length of chunk <br>
+	 * So we take the total entry, logically divide it onto MAX_DB_CONTENT_SIZE size segments,
+	 * search for the last occurrence of delimiters according to above paradigm, extract that part as
+	 * chunk, continue onto to next logical segment from that point.
 	 * @param message original message
-	 * @return final message chunk to store as original interaction element
+	 * @return final List of user/asst 2 element array message chunks to store as interaction elements
 	 */
 	private List<ChatFormat.Message[]> segmentContent(Message message, Message message2) {
 		List<ChatFormat.Message[]> ret = new ArrayList<ChatFormat.Message[]>();
@@ -600,7 +615,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 					listCtr+=2;
 				break;
 			case Role.ASSISTANT:
-				// role is assistant without previous valid USER or SYSTEM (matching timestamp), otherwise we would have skipped this entry
+				// role is assistant without previous valid USER (matching timestamp), otherwise we would have skipped this entry
+				// Our insertMap will only account for USER level rather than try to resolve a missing SYSTEM as this would
+				// effectively double our secondary retrieval without corresponding gain in semantic quality.
 				TimestampRole tsr = new TimestampRole();
 				tsr.setTimestamp(tsRole.getTimestamp());
 				tsr.setRole(Role.USER);
@@ -663,13 +680,14 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        	// move on to next entry
 		        	++listCtr;
 		        	continue;
-		        // we should encounter either a user/system to insert, or have a previous user/system entry
+		        // we should encounter either a user to insert, or have a previous user/system entry
+		        // we dont try to backfill system level responses for efficiency sake.
 		        case Role.ASSISTANT:
 		        	insertMapValue = insertMap.get(listCtr);
 		        	if (insertMapValue != null) {
 		        		Optional<Result> insertMessage = matchTimestampRole(timestampRoleResult, insertMapValue);
 		        		if (insertMessage.isPresent() ) {
-		        			// USER/SYSTEM before ASSISTANT
+		        			// USER before ASSISTANT
 		        			Result resultU = insertMessage.get();
 		        			Message resultMessageU = (Message) ((NoIndex)(resultU.get(resultU.length()-1))).getInstance();
 		        			int tokenSize = promptFrame.chatFormat().length(resultMessageU.encode());
@@ -684,7 +702,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        		    	break mainLoop;
 		        		} else {
 		        			// we found an insert map directive, but then no matching database entry to insert, this indicates bad data sequence
-		        			log.info(">> DATABASE INCONSISTENCY: NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
+		        			log.info(">> POSSIBLE SYSTEM INSERTION INTO DIALOG SEQUENCE IGNORED:"+insertMapValue);
 		        		}
 		        	// no insert, we have to check valid user/system previous
 		        	} else {
@@ -715,7 +733,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        	++listCtr;
 		        	continue;
 		        default:
-		            log.error("Unknown role encountered");
+		            log.error("!UNKNOWN ROLE ENCOUNTERED!");
 		            ++listCtr;
 		            continue;
 		    }
