@@ -34,6 +34,7 @@ public class Llama3 {
 	public static MethodHandle stringToTokenMH;
 	public static MethodHandle tokenToStringMH;
 	public static MethodHandle applyChatTemplateMH;
+	public static MethodHandle applyLoraAdapterMH;
 	public static MethodHandle resetContextMH;
 	public static MethodHandle getTokenBOSMH;
 	public static MethodHandle getTokenEOSMH;

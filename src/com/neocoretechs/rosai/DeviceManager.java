@@ -14,7 +14,7 @@ import org.apache.commons.logging.LogFactory;
  */
 public final class DeviceManager {
 	private static final Log log = LogFactory.getLog(DeviceManager.class);
-	private static boolean DEBUG = true;
+	private static boolean DEBUG = false;
 
 	public static void loadModel(StringTensor model, int contextSize) {
 		MemorySegment hostSeg = model.getSegment();
@@ -128,6 +128,30 @@ public final class DeviceManager {
 	    }
 	    return outLen;
 	}
+	
+	/**
+	 * The optimal scale value for LoRA adapters, often referred to as the alpha value, 
+	 * is generally recommended to be set at twice the rank's value. 
+	 * This adjustment helps in achieving better performance during fine-tuning across various training scenarios.
+	 * Typically 1 or 2
+	 * @param ggufPath
+	 * @param scale
+	 * @return
+	 */
+	public static int applyLoraAdapter(StringTensor ggufPath, float scale) {
+		long filePath = ggufPath.getSegment().address();
+		int outLen;
+	    try {
+	        outLen = (int) Llama3.applyLoraAdapterMH.invokeExact(
+	            filePath,                         // gguf path
+	            scale							// scale of weighting
+	        );
+	    } catch (Throwable t) {
+	        throw new RuntimeException("apply_chat_template failed", t);
+	    }
+	    return outLen;
+	}
+	
 	public static void resetContext() {
 		try {
 			Llama3.resetContextMH.invokeExact();

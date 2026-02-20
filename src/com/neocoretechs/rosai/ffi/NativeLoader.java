@@ -139,6 +139,14 @@ public final class NativeLoader {
 				        					)
 				);
 		if(DEBUG) log.info("token_to_string:"+Llama3.tokenToStringMH);
+		Llama3.applyLoraAdapterMH = linker.downcallHandle(
+				lookup.find("apply_lora_adapter").orElseThrow(),
+				FunctionDescriptor.of(ValueLayout.JAVA_INT,
+				        				ValueLayout.JAVA_LONG, // StringTensor of LoRA GGUF path
+				        				ValueLayout.JAVA_FLOAT // scale
+				        				)
+				);
+		if(DEBUG) log.info("apply_lora_adapter:"+Llama3.applyLoraAdapterMH);
 		//EXPORT int apply_chat_template(uint8_t* chatl, size_t, bool, uint8_t*, int32_t);
 		Llama3.applyChatTemplateMH = linker.downcallHandle(
 		    lookup.find("apply_chat_template").orElseThrow(),

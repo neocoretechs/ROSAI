@@ -419,8 +419,8 @@ public class ModelRunner extends AbstractNodeMain {
 		} catch (InterruptedException e) {
 			return Optional.empty();
 		}
- 		StringTensor retTokens = new StringTensor(Llama3.options.getMaxTokens());
-		//IntTensor retIntTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
+ 		//StringTensor retTokens = new StringTensor(Llama3.options.getMaxTokens());
+		IntTensor retIntTokens = IntTensor.allocate(Llama3.options.getMaxTokens());
  		int tokNum;
         StringTensor p = chatFormat.extractDialogPrompt(prompt);
         if(DEBUG) {
@@ -429,8 +429,8 @@ public class ModelRunner extends AbstractNodeMain {
         	log.info(" =============== ModelRunner.processMessage end dialog to inference: ===============");
         }
 		//try(Timer _ = Timer.log("run model interactive")) {
-			tokNum = DeviceManager.runModel(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
-			//tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retIntTokens,Llama3.options.getMaxTokens());
+			//tokNum = DeviceManager.runModel(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
+			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retIntTokens,Llama3.options.getMaxTokens());
 			if(DEBUG)
 				log.info("Returned Tokens="+tokNum);
 		//}
@@ -438,8 +438,8 @@ public class ModelRunner extends AbstractNodeMain {
 			log.info("Context length exceeded or other error, returning with empty token list..");
 			return Optional.empty();
 		}
-		String cleanString = chatFormat.stripFormatting(retTokens.toString());
-		//String cleanString = chatFormat.stripFormatting(DeviceManager.decode(chatFormat, retIntTokens.toList()));
+		//String cleanString = chatFormat.stripFormatting(retTokens.toString());
+		String cleanString = chatFormat.stripFormatting(DeviceManager.decode(chatFormat, retIntTokens.toList()));
 		if(DEBUG) {
 			log.info("<<<<< Returned result of inference:"+cleanString.length());
 			log.info(cleanString.length() == 0 ? "..0 len returning Optional.empty()" : cleanString);

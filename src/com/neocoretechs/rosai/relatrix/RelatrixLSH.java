@@ -75,7 +75,7 @@ import com.neocoretechs.rosai.F32FloatTensor;
 public final class RelatrixLSH implements Serializable, Comparable {
 	private static final Log log = LogFactory.getLog(RelatrixLSH.class);
 	private static final long serialVersionUID = -5410017645908038641L;
-	private static boolean DEBUG = true;
+	private static boolean DEBUG = false;
 	public int numberOfHashTables = 16;
 	public int numberOfHashes = 12;
 	public AsynchRelatrixClientTransaction dbClient;
