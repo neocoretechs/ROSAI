@@ -13,20 +13,14 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
-import java.util.stream.Stream;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -35,13 +29,10 @@ import org.ros.concurrent.CancellableLoop;
 import org.ros.concurrent.CircularBlockingDeque;
 import org.ros.message.MessageListener;
 import org.ros.namespace.GraphName;
-import org.ros.namespace.NameResolver;
 import org.ros.node.AbstractNodeMain;
 import org.ros.node.ConnectedNode;
-import org.ros.node.parameter.ParameterTree;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
@@ -83,9 +74,13 @@ public class ModelRunner extends AbstractNodeMain {
 	public static final String USER_PROMPT = "/user_prompt";
 	public static final String ASSIST_PROMPT = "/assist_prompt";
 	public static final String LLM = "/model";
+	
+	// robot motion failsafes
+	public static final String ROBOT_ACCELERATION_X = "robot_acceleration_x";
+	public static final String ROBOT_ACCELERATION_Y = "robot_acceleration_y";
 
-	public static int outgoingMessageQueueLength = 64;
-	public static int incomingMessageQueueLength = 128;
+	public static int outgoingMessageQueueLength = 4;
+	public static int incomingMessageQueueLength = 64;
 	CircularBlockingDeque<String> outgoingMessageQueue = new CircularBlockingDeque<>(outgoingMessageQueueLength);
 	CircularBlockingDeque<ChatFormat.Message> incomingMessageQueue = new CircularBlockingDeque<>(incomingMessageQueueLength);
 
@@ -103,16 +98,6 @@ public class ModelRunner extends AbstractNodeMain {
 	
 	ChatFormat chatFormat;
 
-	static class RangeTime {
-		std_msgs.String range;
-		long rangeTime = 0L;
-		public String toJSON() {
-			return range.getData();
-		}
-	}
-	RangeTime ranges = new RangeTime();
-
-
 	@Override
 	public GraphName getDefaultNodeName() {
 		return GraphName.of("llm");
@@ -120,16 +105,18 @@ public class ModelRunner extends AbstractNodeMain {
 
 	@Override
 	public void onStart(final ConnectedNode connectedNode) {
+	
 		Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
 		    System.err.println("Uncaught in thread " + t + ": " + e);
 		    e.printStackTrace();
 		});
+		
 		Map<String, String> remaps = connectedNode.getNodeConfiguration().getCommandLineLoader().getSpecialRemappings();
 		if( remaps.containsKey(REMAP_DEBUG) )
 			if(remaps.get(REMAP_DEBUG).equals("true")) {
 				DEBUG = true;
 			}
-		
+		// parameter tree to manage dynamic global parameters
 		TreeManager.getInstance().init(connectedNode);
 		
 		SynchronizedThreadManager.getInstance().init(new String[] {"LLM","DB"});
@@ -279,7 +266,8 @@ public class ModelRunner extends AbstractNodeMain {
 		});
 	
 		//
-		// Ultrasonic distance sensor also timestamped and correlated
+		// Sliding window PCA fusion of distance sensor and IMU. Detects object motion and robot motion in world frame.
+		// If we detect acceleration implement dead-man switch protocol to limit freewheeling robot motion.
 		//
 		subsrange.addMessageListener(new MessageListener<std_msgs.String>() {
 			@Override
@@ -289,20 +277,10 @@ public class ModelRunner extends AbstractNodeMain {
 				//} catch (InterruptedException e) { return; }
 				if(DEBUG)
 					log.info("RangeFinder message:"+message.getData());
-				synchronized(ranges) {
-					if(ranges.range == null) {
-						ranges.range = message; //Float.parseFloat(message.getData());
-						ranges.rangeTime = System.currentTimeMillis();
-						processRole("Nearest distance update:\n"+ranges.toJSON(), ChatFormat.Role.USER);
-					} else
-						if(ranges.range.getData() != message.getData()) {
-							ranges.range = message; //Float.parseFloat(message.getData());
-							if((System.currentTimeMillis() - ranges.rangeTime) >= MESSAGE_THRESHOLD) {
-								ranges.rangeTime = System.currentTimeMillis();
-								processRole("Nearest distance update:\n"+ranges.toJSON(), ChatFormat.Role.USER);
-							}
-						}
-				}
+				JSONObject ranges = new JSONObject(message.getData());
+				Object rax = ranges.get(ROBOT_ACCELERATION_X);
+				Object ray = ranges.get(ROBOT_ACCELERATION_Y);
+				processRole(ranges.toString(), ChatFormat.Role.USER);
 			}
 		});
 
