@@ -267,7 +267,6 @@ public class ModelRunner extends AbstractNodeMain {
 	
 		//
 		// Sliding window PCA fusion of distance sensor and IMU. Detects object motion and robot motion in world frame.
-		// If we detect acceleration implement dead-man switch protocol to limit freewheeling robot motion.
 		//
 		subsrange.addMessageListener(new MessageListener<std_msgs.String>() {
 			@Override
@@ -277,10 +276,7 @@ public class ModelRunner extends AbstractNodeMain {
 				//} catch (InterruptedException e) { return; }
 				if(DEBUG)
 					log.info("RangeFinder message:"+message.getData());
-				JSONObject ranges = new JSONObject(message.getData());
-				Object rax = ranges.get(ROBOT_ACCELERATION_X);
-				Object ray = ranges.get(ROBOT_ACCELERATION_Y);
-				processRole(ranges.toString(), ChatFormat.Role.USER);
+				processRole(message.getData(), ChatFormat.Role.USER);
 			}
 		});
 
