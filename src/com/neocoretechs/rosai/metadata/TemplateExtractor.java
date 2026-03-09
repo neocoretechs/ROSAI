@@ -1,8 +1,27 @@
 package com.neocoretechs.rosai.metadata;
 
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import com.neocoretechs.rosai.ChatFormat.Role;
+/**
+ * Metadata fun <p>
+ * <pre>
+ * general.architecture contains items such as mistral, llama, qwen, magistral
+ * this controls the tokenizer, if it says llama, it creates a gpt2 tokenizer
+ * if it says mistral it creates a llama tokenizer!
+ * if it says qwen or magistral it creates a qwen or magistral tokenizer!
+ * from there you can get tokens like so int[] tokenTypes = (int[]) metadata.get("tokenizer.ggml.token_type");
+ * </pre>
+ * @author Jonathan Groff Copyright (C) NeoCoreTechs 2026
+ */
 public class TemplateExtractor {
+    static final String TOKENIZER_GPT2_MODEL = "gpt2"; // Llama3 uses gpt2!
+    static final String TOKENIZER_LLAMA_MODEL = "llama"; // non Llama uses llama!
+    public String model = "gpt2"; // default for Llama models!
+    public String name = null; // Name is based solely on name of model, they all seem to have their own ChatFormat not based on model
+    
 	enum modelToTemplate {
 		LLM_CHAT_TEMPLATE_CHATML("chatml"),
 		LLM_CHAT_TEMPLATE_LLAMA_2("llama2"),                  
@@ -63,7 +82,33 @@ public class TemplateExtractor {
 			return this.model;
 		}
 	};
-
+	/*
+	// This is the Llama, Mistral etc Role enum
+	private enum RoleEnum implements Role {
+		SYSTEM("system"),
+		USER("user"),
+		ASSISTANT("assistant"),
+		ENDOFTURN("<|eot_id|>"); // llama3 specific, overwritten in ctor
+		private final String role;
+		RoleEnum(String role) {
+			this.role = role;
+		}
+		@Override
+		public String getRole() {
+			return role;
+		}
+		@Override
+		public String collect() {
+			return Stream.of(values())
+            .map(Role::getRole)
+            .collect(Collectors.joining("|"));
+		}
+		@Override
+		public String toString() {
+			return role;
+		}
+	}
+	*/
 	public record RoleDelims(
 			String user,
 			String assistant,
@@ -71,22 +116,86 @@ public class TemplateExtractor {
 			String endOfTurn
 			) {}
 
-	public String metaExtract(Map<String, Object> meta) {
-		String family = null;
-		if (meta.containsKey("tokenizer.chat_format")) {
-			family = (String) meta.get("tokenizer.chat_format");
-		} else {
-			if (meta.containsKey("general.architecture")) {
-				family = (String) meta.get("general.architecture");
-			} else { 
-				if (meta.containsKey("tokenizer.model")) {
-					family = (String) meta.get("tokenizer.model");
-				} else {
-					family = "unknown";
-				}
-			}
-		}
-		return family;
+	public void metaExtract(Map<String, Object> meta) {
+		//general.architecture=llama
+		// general.architecture contains items such as mistral, llama, qwen, magistral
+		// this controls the tokenizer, if it says llama, it creates a gpt2 tokenizer
+		// if it says mistral it creates a llama tokenizer!
+		// if it says qwen or magistral it creates a qwen or magistral tokenizer!
+		// from there you can get tokens like so int[] tokenTypes = (int[]) metadata.get("tokenizer.ggml.token_type");
+		model = (String) meta.getOrDefault("general.architecture","llama3");
+		// Wherein Llama models metadata.get("tokenizer.ggml.model") = gpt2
+		// and Mistral uses metadata.get("tokenizer.ggml.model") = llama.
+		// general.name=Llama 3.3 70B Instruct
+		name = ((String) meta.get("general.name")).toLowerCase();
+		if(name.contains("llama") && name.contains("3")) // Meta Llama etc. etc.
+			name = "llama3";
+		else
+			if(name.contains("llama") && name.contains("4")) // Meta Llama etc. etc.
+				name = "llama4";
+			else
+				if(name.contains("llama") && name.contains("2")) {// Meta Llama etc. etc.
+					if(name.contains("sys")) {
+						if(name.contains("bos"))
+							name = "llama2-sys-bos";
+						else
+							if(name.contains("strip"))
+								name = "llama2-sys-strip";
+							else
+								name = "llama2-sys";
+					} else
+						name = "llama2";
+				} else
+					if(name.contains("mistral")  && name.contains("1")) //models--mistralai etc. etc.
+						name="mistral-v1";
+					else
+						if(name.contains("mistral")  && name.contains("3")) { //models--mistralai etc. etc.
+							if(name.contains("tekken"))
+								name="mistral-v3-tekken";
+							else
+								name="mistral-v3";
+						} else
+							if(name.contains("mistral")  && name.contains("7")) {
+								if(name.contains("tekken"))//models--mistralai etc. etc.
+									name = "mistral-v7-tekken";
+								else
+									name="mistral-v7";
+							}	
+							else
+								if(name.contains("qwen"))
+									name="qwen";
+								else
+									if(name.contains("magistral"))
+										name="mistral";
+									else
+										if(name.contains("phi") && name.contains("3")) // Meta Llama etc. etc.
+											name = "phi3";
+										else
+											if(name.contains("phi") && name.contains("4")) // Meta Llama etc. etc.
+												name = "phi4";
+											else
+												if(name.contains("gemma"))
+													name = "gemma";
+												else
+													if(name.contains("vicuna")) {
+														if(name.contains("orca"))
+														name = "vicuna-orca";
+														else
+															name = "vicuna";
+													} else
+														if(name.contains("deepseek")) {
+															if(name.contains("2"))
+																name = "deepseek2";
+															else
+																if(name.contains("3"))
+																	name = "deepseek3";
+																else
+																	name = "deepseek";
+														} else
+															if(name.contains("grok"))
+																name = "grok-2";
+
+
 	}
 	/**
 	 * Once you have the metadata: "tokenizer.chat_format": "qwen2"
@@ -227,9 +336,4 @@ public class TemplateExtractor {
 			Map.entry("solar-open", new RoleDelims("<|user|>", "<|assistant|>", null, "<|end_of_turn|>"))
 			);
 
-	public RoleDelims getMeta(Map<String, Object> metadata) {
-		String format = (String) metadata.getOrDefault("tokenizer.chat_format", "chatml");
-		RoleDelims delims = CHAT_TEMPLATES.getOrDefault(format, CHAT_TEMPLATES.get("chatml"));
-		return delims;
-	}
 }

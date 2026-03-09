@@ -15,7 +15,7 @@ import java.util.Map;
 import com.neocoretechs.rosai.FloatTensor;
 import com.neocoretechs.rosai.Llama3;
 
-final class GGUF {
+public final class GGUF {
     private static final int GGUF_MAGIC = 0x46554747;
     private static final int DEFAULT_ALIGNMENT = 32; // must be a power of 2
     private static final List<Integer> SUPPORTED_GGUF_VERSIONS = List.of(2, 3);

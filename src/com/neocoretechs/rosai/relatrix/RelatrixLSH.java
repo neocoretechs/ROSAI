@@ -12,10 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map.Entry;
-import java.util.NavigableMap;
 import java.util.Optional;
-import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -81,7 +78,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public AsynchRelatrixClientTransaction dbClient;
 	private TransactionId xid;
 	private int maxTokens;
-	private static final float maxTokenOverhead = .30f;
+	private static final float maxTokenOverhead = .35f;
 	private static final int MAX_DB_CONTENT_SIZE = 2000;
 	private static AtomicLong uniTime = new AtomicLong(System.currentTimeMillis());
 	/**

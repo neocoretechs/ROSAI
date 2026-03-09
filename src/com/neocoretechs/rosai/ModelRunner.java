@@ -11,7 +11,9 @@ import java.io.PrintWriter;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -43,6 +45,9 @@ import com.neocoretechs.rosai.contentprocessor.ContentParser;
 import com.neocoretechs.rosai.ffi.NativeLoader;
 import com.neocoretechs.rosai.parametertree.TreeManager;
 import com.neocoretechs.rosai.relatrix.RelatrixLSH;
+import com.neocoretechs.rosai.metadata.GGUF;
+import com.neocoretechs.rosai.metadata.TemplateExtractor;
+import com.neocoretechs.rosai.metadata.TemplateExtractor.RoleDelims;
 
 import diagnostic_msgs.DiagnosticStatus;
 import diagnostic_msgs.KeyValue;
@@ -136,7 +141,26 @@ public class ModelRunner extends AbstractNodeMain {
 		// contextLength is used for maximum context size. 
 		//
 		Llama3.options = Options.parseOptions(opts);
-		StringTensor s = new StringTensor(Llama3.options.modelPath().toString());
+		String filePath = Llama3.options.modelPath().toString();
+		File file = new File(filePath);
+		if(!file.exists()) {
+			System.out.println("The requested model:"+filePath+" does not exist, the application will now exit.");
+			connectedNode.shutdown();
+			System.exit(1);
+		}
+		StringTensor s = new StringTensor(filePath);
+		// extract metadata for chat templating
+		try {
+			GGUF meta = GGUF.loadModel(Path.of(file.toURI()));
+			TemplateExtractor te = new TemplateExtractor();
+			te.metaExtract(meta.getMetadata());
+			RoleDelims rd = TemplateExtractor.CHAT_TEMPLATES.get(te.name);
+			if(rd == null) {
+				log.info("Can't find metadata for chat template, default to llama3");
+				rd = TemplateExtractor.CHAT_TEMPLATES.get("llama3");
+			}
+			chatFormat.roleDelims = rd;
+		} catch (IOException e1) {}
 		//try(Timer _ = Timer.log("load model")) {
 		//
 		// start a thread to load the model. During load the modelLoaded flag will

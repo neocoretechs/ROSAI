@@ -14,6 +14,8 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import com.neocoretechs.rosai.metadata.TemplateExtractor.RoleDelims;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
@@ -27,6 +29,7 @@ public class ChatFormat implements Serializable {
 	private transient Set<Integer> stopTokens;
 	private transient int bos;
 	public static String endOfTurn = "<|eot_id|>"; // llama3 specific, overwritten in ctor
+	public static RoleDelims roleDelims;
 	
 	/* This is the Gemma Role enum:
 	public enum Role {
@@ -139,6 +142,15 @@ public class ChatFormat implements Serializable {
 				.replaceAll("(?m)^USER:|AI:", "")
 				.trim();
 	}*/
+
+	public static String getRoleDelims(Role role) {
+		String prefix = switch(role) {
+			case USER -> roleDelims.user();
+			case ASSISTANT -> roleDelims.assistant();
+			case SYSTEM -> roleDelims.system();
+		};
+		return prefix;
+	}
 
 	public String stripFormatting(String input) {
 	    if (input == null || input.isEmpty()) return input;
