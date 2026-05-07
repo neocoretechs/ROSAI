@@ -245,7 +245,13 @@ public class ModelRunner extends AbstractNodeMain {
 		final Subscriber<stereo_msgs.StereoImage> subsobjd = connectedNode.newSubscriber("/stereo_msgs/ObjectDetect", stereo_msgs.StereoImage._TYPE);
 		final Subscriber<std_msgs.String> subsrange = connectedNode.newSubscriber("/sensor_msgs/range",std_msgs.String._TYPE);
 		final Subscriber<diagnostic_msgs.DiagnosticStatus> subsbat = connectedNode.newSubscriber("robocore/status", diagnostic_msgs.DiagnosticStatus._TYPE);
-		
+		log.info("Model publisher:"+pubmodel);
+		log.info("Model move publisher:"+pubsmodelmove);
+		log.info("System prompt subscriber:"+subsystem);
+		log.info("User prompt subscriber:"+subsuser);
+		log.info("Object detect subscriber:"+subsobjd);
+		log.info("Sensor range subscriber:"+subsrange);
+		log.info("Diagnostic subscriber:"+subsbat);
 		//
 		// set up subscriber callback for object detection messages
 		//

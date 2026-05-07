@@ -123,11 +123,19 @@ public class TemplateExtractor {
 		// if it says mistral it creates a llama tokenizer!
 		// if it says qwen or magistral it creates a qwen or magistral tokenizer!
 		// from there you can get tokens like so int[] tokenTypes = (int[]) metadata.get("tokenizer.ggml.token_type");
-		model = (String) meta.getOrDefault("general.architecture","llama3");
+		model = (String) meta.get("general.architecture");
 		// Wherein Llama models metadata.get("tokenizer.ggml.model") = gpt2
 		// and Mistral uses metadata.get("tokenizer.ggml.model") = llama.
 		// general.name=Llama 3.3 70B Instruct
-		name = ((String) meta.get("general.name")).toLowerCase();
+		String generalName = (String) meta.get("general.name");
+		if(generalName == null) {
+			if(model == null) {
+				System.out.println("Metadata dump:"+meta);
+				throw new RuntimeException("Cannot extract metadata general.architecture or general.name, therfore cannot deduce model");
+			}
+			generalName = model;
+		}
+		name = generalName.toLowerCase();
 		if(name.contains("llama") && name.contains("3")) // Meta Llama etc. etc.
 			name = "llama3";
 		else
