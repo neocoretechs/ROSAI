@@ -8,12 +8,17 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
-
+import java.io.UnsupportedEncodingException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -36,6 +41,8 @@ import org.ros.node.ConnectedNode;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
 import org.json.JSONObject;
+import org.jsoup.nodes.Document;
+import org.jsoup.parser.Parser;
 
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.parallel.SynchronizedThreadManager;
@@ -514,80 +521,84 @@ public class ModelRunner extends AbstractNodeMain {
 					return Optional.of("processing URL "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
 				}
 			} else {
-				if(chatMessage.startsWith("file://")) {
-					try {
-						log.info(">>>processing File:"+chatMessage);
-						File f= new File(chatMessage.substring(7));
-						chatMessage = ContentParser.extractProgressive(f);
-					} catch(Exception e) {
-						return Optional.of("processing file "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
-					}
+				if(chatMessage.startsWith("https://")) {
+					return ContentParser.parseHttps(chatMessage);
 				} else {
-					// specify param://key|value
-					if(chatMessage.startsWith("param://")) {
-						String xsel = chatMessage.substring(8);
-						String[] nsSel = xsel.split(",");
-						TreeManager.getInstance().set(nsSel[0], nsSel[1]);
-						return Optional.of("Parameter "+xsel+" set Ok at "+ LocalDateTime.now());
+					if(chatMessage.startsWith("file://")) {
+						try {
+							log.info(">>>processing File:"+chatMessage);
+							File f= new File(chatMessage.substring(7));
+							chatMessage = ContentParser.extractProgressive(f);
+						} catch(Exception e) {
+							return Optional.of("processing file "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
+						}
 					} else {
-						// pop://namespace,selector - pop the parsed link stack
-						if(chatMessage.startsWith("pop://")) {
-							try {
-								chatMessage = ContentParser.extractProgressiveFile();
-							} catch (Exception e) {
-								return Optional.of("Exception parsing content "+e.getMessage()+" at "+ LocalDateTime.now());
-							}
+						// specify param://key|value
+						if(chatMessage.startsWith("param://")) {
+							String xsel = chatMessage.substring(8);
+							String[] nsSel = xsel.split(",");
+							TreeManager.getInstance().set(nsSel[0], nsSel[1]);
+							return Optional.of("Parameter "+xsel+" set Ok at "+ LocalDateTime.now());
 						} else {
-							if(chatMessage.startsWith("list://")) {
-								StringBuilder sb = new StringBuilder("Keys:");
-								TreeManager.getInstance().listCachedKeys().forEach(e->{
-									sb.append(e.toString());
-									sb.append(",");
-								});
-								return Optional.of(sb.toString()+" at "+LocalDateTime.now());
+							// pop://namespace,selector - pop the parsed link stack
+							if(chatMessage.startsWith("pop://")) {
+								try {
+									chatMessage = ContentParser.extractProgressiveFile();
+								} catch (Exception e) {
+									return Optional.of("Exception parsing content "+e.getMessage()+" at "+ LocalDateTime.now());
+								}
 							} else {
-								if(chatMessage.startsWith("remove://")) {
-									if(chatMessage.length() == 9) {
-										TreeManager.getInstance().invalidateAll();
-									} else {
-										TreeManager.getInstance().invalidate(chatMessage.substring(9));
-									}
-									return Optional.of("Parameters removed Ok at "+ LocalDateTime.now());
+								if(chatMessage.startsWith("list://")) {
+									StringBuilder sb = new StringBuilder("Keys:");
+									TreeManager.getInstance().listCachedKeys().forEach(e->{
+										sb.append(e.toString());
+										sb.append(",");
+									});
+									return Optional.of(sb.toString()+" at "+LocalDateTime.now());
 								} else {
-									if(chatMessage.startsWith("dbfile://") ) {
-										try {
-											File f= new File(chatMessage.substring(9));
-											SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, f);
-										} catch (Exception e) {
-											return Optional.of("Exception parsing file content "+e.getMessage()+" at "+ LocalDateTime.now());
+									if(chatMessage.startsWith("remove://")) {
+										if(chatMessage.length() == 9) {
+											TreeManager.getInstance().invalidateAll();
+										} else {
+											TreeManager.getInstance().invalidate(chatMessage.substring(9));
 										}
-										return Optional.of("Frontload database Ok at "+ LocalDateTime.now());
+										return Optional.of("Parameters removed Ok at "+ LocalDateTime.now());
 									} else {
-										if(chatMessage.startsWith("dburl://") ) {
+										if(chatMessage.startsWith("dbfile://") ) {
 											try {
-												chatMessage = chatMessage.substring(8);
-												SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, chatMessage);
+												File f= new File(chatMessage.substring(9));
+												SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, f);
 											} catch (Exception e) {
-												return Optional.of("Exception parsing url content "+e.getMessage()+" at "+ LocalDateTime.now());
+												return Optional.of("Exception parsing file content "+e.getMessage()+" at "+ LocalDateTime.now());
 											}
 											return Optional.of("Frontload database Ok at "+ LocalDateTime.now());
 										} else {
-											if(chatMessage.startsWith("dbdump://") ) {
+											if(chatMessage.startsWith("dburl://") ) {
 												try {
-													Iterator it = relatrixLSH.dump();
-													while(it.hasNext()) {
-														String res = relatrixLSH.dump(it, chatFormat);
-														while(outgoingMessageQueue.length() >= outgoingMessageQueueLength) {
-															System.out.println("Waiting for outgoing queue...");
-															Thread.sleep(100);
-														}
-														// push it right on output
-														outgoingMessageQueue.addLast(res);
-													}
-												} catch (ExecutionException | InterruptedException e) {
-													e.printStackTrace();
+													chatMessage = chatMessage.substring(8);
+													SystemPrompts.frontloadDbFromHtml(relatrixLSH, chatFormat, chatMessage);
+												} catch (Exception e) {
+													return Optional.of("Exception parsing url content "+e.getMessage()+" at "+ LocalDateTime.now());
 												}
-												return Optional.empty();
+												return Optional.of("Frontload database Ok at "+ LocalDateTime.now());
+											} else {
+												if(chatMessage.startsWith("dbdump://") ) {
+													try {
+														Iterator it = relatrixLSH.dump();
+														while(it.hasNext()) {
+															String res = relatrixLSH.dump(it, chatFormat);
+															while(outgoingMessageQueue.length() >= outgoingMessageQueueLength) {
+																System.out.println("Waiting for outgoing queue...");
+																Thread.sleep(100);
+															}
+															// push it right on output
+															outgoingMessageQueue.addLast(res);
+														}
+													} catch (ExecutionException | InterruptedException e) {
+														e.printStackTrace();
+													}
+													return Optional.empty();
+												}
 											}
 										}
 									}

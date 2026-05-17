@@ -1,15 +1,33 @@
 package com.neocoretechs.rosai.contentprocessor;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
+import java.nio.charset.CodingErrorAction;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Optional;
 import java.util.Stack;
+import java.util.zip.GZIPInputStream;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.parser.Parser;
 import org.jsoup.select.Elements;
 import org.ros.node.ConnectedNode;
 
@@ -561,6 +579,79 @@ public class ContentParser {
 			sb.append(content);
 			return sb.toString();
 		}
+		
+		public static Optional<String> parseHttps(String chatMessage) {
+			URI baseURI = URI.create(chatMessage);
+			HttpClient client = HttpClient.newBuilder()
+			    .followRedirects(HttpClient.Redirect.NORMAL)
+			    .connectTimeout(Duration.ofSeconds(20))
+			    .build();
+			HttpRequest req = HttpRequest.newBuilder()
+			    .uri(URI.create(baseURI.toString()))
+			    .timeout(Duration.ofSeconds(30))
+			    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36")
+			    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			    .header("Accept-Language", "en-US,en;q=0.9")
+			    .header("Accept-Encoding", "gzip, deflate, br")
+			    .GET()
+			    .build();
+			HttpResponse<byte[]> resp;
+			try {
+				resp = client.send(req, HttpResponse.BodyHandlers.ofByteArray());
+			} catch (IOException | InterruptedException e) {
+				return Optional.of("processing URL "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
+			}
+			int status = resp.statusCode();
+			byte[] bodyBytes = resp.body();
+			// If compressed, HttpClient already handled it when using BodyHandlers.ofString in many cases.
+			// Convert bytes to string using correct charset if available
+			String charset = "UTF-8";
+			String ct = resp.headers().firstValue("Content-Type").orElse("");
+			String contentEncoding = resp.headers().firstValue("Content-Encoding").orElse("").toLowerCase();
+			if (ct.contains("charset=")) charset = ct.substring(ct.indexOf("charset=") + 8).trim();
+			/*String html;
+			//html = new String(bodyBytes, charset);
+			CharsetDecoder decoder = Charset.forName(charset).newDecoder();    
+			//Error handling actions for malformed and unmappable characters
+			decoder.onMalformedInput(CodingErrorAction.REPLACE);
+			decoder.onUnmappableCharacter(CodingErrorAction.REPORT);
+			//I/O buffer creation
+			CharBuffer charStore = CharBuffer.allocate(bodyBytes.length);
+			ByteBuffer utfStore = ByteBuffer.wrap(bodyBytes);
+			//Output string instance to concatenate each decoded byte
+			StringBuilder decodedText = new StringBuilder();
+			CoderResult result;
+			do {
+				result = decoder.decode(utfStore, charStore, false);
+				charStore.flip();
+				decodedText.append(charStore);
+				charStore.clear(); 
+				if (result.isError()) {
+					// Error handling logic
+					if (result.isMalformed()) {
+						return Optional.of("Encountered malformed byte sequence!");//Malformed error
+					} else if (result.isUnmappable()) {
+						return Optional.of("Encountered unmappable character!");//Unmappable error
+					}
+				}     
+			} while (!result.isUnderflow());     
+			System.out.println("Decoded Text: " + decodedText); // Decoded text is shown as output!
+			*/
+			System.out.println("Response="+resp.statusCode());
+			System.out.println("Content type:"+ct+" encoding:"+contentEncoding+" charset:"+charset);
+			if(status >= 200 && status <= 299) {
+				try {
+					Document d = ContentParser.fetchAndParse(ct, contentEncoding, bodyBytes, baseURI.toString());//Jsoup.parse(decodedText.toString(),baseURI.toString());
+					chatMessage = d.text();
+				} catch (Exception e) {
+					return Optional.of("processing URL "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
+				}
+			} else {
+				return Optional.of("processing URL "+chatMessage+" failed due to response:"+resp.statusCode()+" at "+ LocalDateTime.now());
+			}
+			return Optional.of(chatMessage);
+		}
+		
 		public static void unitTest(String source, ConnectedNode cn) throws Exception {
 			TreeManager.getInstance().init(cn);
 			if(source.startsWith("http")) {
@@ -605,4 +696,39 @@ public class ContentParser {
 					System.out.println(++item+".) "+content);
 			}
 		}
+
+		public static Document fetchAndParse(String contentType, String contentEncoding, byte[] bodyBytes, String baseUri) throws Exception {
+		    //HttpResponse<byte[]> resp = client.send(req, HttpResponse.BodyHandlers.ofByteArray());
+		    //byte[] bodyBytes = resp.body();
+		    // 1) Inspect headers
+		    //String contentEncoding = resp.headers().firstValue("Content-Encoding").orElse("").toLowerCase();
+		    //String contentType = resp.headers().firstValue("Content-Type").orElse("").toLowerCase();
+		    // 2) Decompress if needed
+		    InputStream in = new ByteArrayInputStream(bodyBytes);
+		    //if (contentEncoding.contains("br")) {
+		       // in = new BrotliInputStream(in);
+		    //} else 
+		    if (contentEncoding.contains("gzip")) {
+		        in = new GZIPInputStream(in);
+		    } else if (contentEncoding.contains("deflate")) {
+		        in = new java.util.zip.InflaterInputStream(in);
+		    } // else no decompression
+
+		    // 3) Determine charset (prefer header; Jsoup can also detect from meta)
+		    String charset = null;
+		    int idx = contentType.indexOf("charset=");
+		    if (idx != -1) {
+		        charset = contentType.substring(idx + 8).trim();
+		    }
+		    // 4) Let Jsoup parse from InputStream; pass charset if known, otherwise let Jsoup detect
+		    Document doc;
+		    if (charset != null && !charset.isEmpty()) {
+		        doc = Jsoup.parse(in, charset, baseUri);
+		    } else {
+		        // Jsoup will try to detect charset from meta tags
+		        doc = Jsoup.parse(in, null, baseUri);
+		    }
+		    return doc;
+		}
+
 }
