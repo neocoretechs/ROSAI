@@ -1,0 +1,18 @@
+The ClassTool is a powerful utility in RockSack that allows you to instrument a custom class to create multiple index fields, enabling efficient retrieval based on a complex, compound key. Here's a step-by-step guide on how to use the ClassTool to achieve this: 1. Annotate your custom class: Begin by annotating your custom class with the `@CompareAndSerialize` annotation. This annotation indicates that the class should be instrumented by the ClassTool.
+2. Define the index fields: Identify the fields in your custom class that you want to use as index fields. These fields will be used to create a compound key. Annotate each of these fields with the `@ComparisonOrderField` annotation, specifying the order in which they should be used in the compound key.
+3. Specify the comparison order: Use the `@ComparisonOrderMethod` annotation to specify a method that will be used to compare instances of your custom class. This method should implement the `java.lang.Comparable` interface.
+4. Run the ClassTool: Run the ClassTool on your custom class, either programmatically or using a build tool like Maven or Gradle. The ClassTool will generate additional fields and methods in your class to support indexing and retrieval based on the compound key.
+5. Use the instrumented class: Once the ClassTool has instrumented your custom class, you can use it to store and retrieve instances of the class in a RockSack database. The instrumented class will have additional methods and fields that allow you to efficiently retrieve instances based on the compound key. Here's an example of how you might use the ClassTool to instrument a custom class:
+```java
+@CompareAndSerialize
+public class Person { @ComparisonOrderField(order = 1) private String firstName; @ComparisonOrderField(order = 2) private String lastName; @ComparisonOrderField(order = 3) private int age; @ComparisonOrderMethod public int compareTo(Person other) { // implement comparison logic here }
+}
+```
+In this example, the `Person` class has three fields that are annotated with `@ComparisonOrderField`, indicating that they should be used as index fields. The `compareTo` method is annotated with `@ComparisonOrderMethod`, specifying the comparison logic for instances of the `Person` class. After running the ClassTool on the `Person` class, you can use it to store and retrieve instances of the class in a RockSack database, using the compound key composed of the `firstName`, `lastName`, and `age` fields. For example:
+```java
+RockSackDB db =...;
+Person person = new Person("John", "Doe", 30);
+db.put(person); // retrieve all persons with firstName = "John" and lastName = "Doe"
+List<Person> results = db.subSet(new Person("John", "Doe", 0), new Person("John", "Doe", Integer.MAX_VALUE));
+```
+In this example, the `subSet` method is used to retrieve all instances of the `Person` class that have a `firstName` of "John" and a `lastName` of "Doe", using the compound key composed of the `firstName`, `lastName`, and `age` fields.

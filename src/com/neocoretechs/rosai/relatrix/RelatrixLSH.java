@@ -25,10 +25,12 @@ import org.apache.commons.logging.LogFactory;
 
 import com.neocoretechs.relatrix.DuplicateKeyException;
 import com.neocoretechs.relatrix.Relation;
+import com.neocoretechs.relatrix.Relatrix;
 import com.neocoretechs.relatrix.type.RelationList;
 import com.neocoretechs.relatrix.Result;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.key.NoIndex;
+import com.neocoretechs.relatrix.parallel.ExecutionContextHolder;
 import com.neocoretechs.rocksack.TransactionId;
 
 import com.neocoretechs.rosai.lsh.CosineHash;
@@ -88,7 +90,25 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	private List<CosineHash[]> hashTable;
 	private UUID key;
 	
-	static record NearResult(int tokenSize,Result result) {
+	static final class NearResult {
+		public int tokenSize;
+		private Result result;
+		NearResult(int tokenSize,Result result) {
+			this.tokenSize = tokenSize;
+			this.result = result;
+		}
+		public Result getResult() {
+			return result;
+		}
+		public Object getDomain() {
+			return ((Relation)result.get()).getDomain();
+		}
+		public Object getMap() {
+			return ((Relation)result.get()).getMap();
+		}
+		public Object getRange() {
+			return ((Relation)result.get()).getRange();
+		}
 	}
 	
 	private static class ThetaPair {
@@ -97,6 +117,18 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	    final int index;         // original index for deterministic tie-break
 	    ThetaPair(double theta, NearResult near, int index) {
 	        this.theta = theta; this.near = near; this.index = index;
+	    }
+	    public Object getNearResult(int elem) {
+	    	switch(elem) {
+	    	case 0:
+	    		return near.getDomain();
+	    	case 1:
+	    		return near.getMap();
+	    	case 2:
+	    		return near.getRange();
+	    	default:
+	    		throw new RuntimeException("bad param to getNearResult:"+elem);
+	    	}
 	    }
 	}
 
@@ -148,47 +180,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		}
 		return retTime;
 	}
-	/**
-	 * Query the hash table for a vector. It calculates the hash for the vector,
-	 * and does a lookup in the hash table. If no candidates are found, an empty
-	 * list is returned, otherwise, the list of candidates is returned.
-	 * 
-	 * @param query The query vector.
-	 * @return Does a lookup in the table for a query using its hash. If no
-	 *         candidates are found, an empty list is returned, otherwise, the
-	 *         list of candidates is returned as List<Result> where Result contains timetamp, NoIndex with Message
-	 * @throws IOException asynchronous database client exception
-	 * @throws IllegalAccessException asynchronous database client exception
-	 * @throws ClassNotFoundException asynchronous database client exception
-	 * @throws IllegalArgumentException asynchronous database client exception
-	 * @throws ExecutionException asynchronous database client exception
-	 * @throws InterruptedException asynchronous database client exception
-	 */
-	public List<Result> query(List<Integer> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
-		ArrayList<Result> res = new ArrayList<Result>();
-		for(int i = 0; i < hashTable.size(); i++) {
-			Integer combinedHash = hash(hashTable.get(i), normalize(query));
-			//if(DEBUG)
-			//	log.info("Querying combined hash for query "+i+" of "+hashTable.size()+":"+combinedHash);
-			CompletableFuture<Iterator> cit = dbClient.findSet(xid, combinedHash, '?', '?');
-			Iterator<?> it = cit.get();
-			//int cnt = 0;
-			while(it.hasNext()) {
-				Result r = (Result) it.next();
-				// should be NoIndex values
-				res.add(r);
-				//System.out.print(++cnt+"\r");
-			}
-			//System.out.println();
-		}
-		return res;
-	}
+
 
 	/**
 	 * Perform a parallel Relatrix query on the normalized FloatTensor of untemplated content.<p>
 	 * The query will be by LSH index, returning TimestampRole and content String
 	 * @param normalizedQuery FloatTensor of bare toeksn which will produce a LSH hash key to search by
-	 * @return List or Result result set from Relatrix element 0 original LSH, element 1 TimestampRole, element 2, content string
+	 * @return List or Result result set from Relatrix Relation domain:original LSH, map:TimestampRole, range:content string
 	 * @throws InterruptedException
 	 * @throws ExecutionException
 	 */
@@ -208,14 +206,14 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @param query The query vector.
 	 * @return Does a lookup in the table for a query using its hash. If no
 	 *         candidates are found, an empty list is returned, otherwise, the
-	 *         list of candidates is returned as List<Result> where Result contains TimestampRole, content String
+	 *         list of candidates is returned as List<Result> where Result contains a Relation with TimestampRole as map, content String as range
 	 * @throws ExecutionException asynchronous database client exception
 	 * @throws InterruptedException asynchronous database client exception
 	 */
 	public List<Result> queryParallel(List<Object> query) throws InterruptedException, ExecutionException  {
 		List<Result> res = null;
 		//try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
-			CompletableFuture<List> cres = dbClient.findSetParallel(xid, query, '?', '?');
+			CompletableFuture<List> cres = dbClient.findSetParallel(xid, query, '*', '*');
 			res = cres.get();
 		//}
 		return res;
@@ -223,7 +221,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	/**
 	 * Perform a parallel query on the map values which in our context are TimestampRole instances
 	 * @param query The List of instances to query
-	 * @return the Result instances of result set containing original TimestampRole and Message
+	 * @return the Result instances of result set containing a Relation with original TimestampRole and Message as map and range, domain is index
 	 * @throws IllegalArgumentException
 	 * @throws ClassNotFoundException
 	 * @throws IllegalAccessException
@@ -234,7 +232,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	public List<Result> queryParallelMap(List<Object> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
 		List<Result> res = null;
 		//try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
-			CompletableFuture<List> cres = dbClient.findSetParallel(xid, '*', query, '?');
+			CompletableFuture<List> cres = dbClient.findSetParallel(xid, '*', query, '*');
 			res = cres.get();
 			//if(DEBUG)
 			//	for(Result r: res)
@@ -536,10 +534,10 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				// each timestamp entry
 				for(int i = 0; i < resByTime.size(); i++) {
 					Result result = resByTime.get(i);
-					// LSH at Result.get(0)
+					// LSH at ((Relation)Result.get()).getDomain()
 					// re-form the nearest list by getting all the LSH for the given timestamp
-					if(!lshQuery.contains(result.get(0)))
-						lshQuery.add(result.get(0));
+					if(!lshQuery.contains(((Relation)result.get()).getDomain()))
+						lshQuery.add(((Relation)result.get()).getDomain());
 				}
 				// now query the matching LSH indexes we got from each timestamp
 				thetaNearestResults = queryParallel(lshQuery);
@@ -563,7 +561,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		List<ThetaPair> scored = new ArrayList<>(K);
 		for (int i = 0; i < K; i++) {
 		    Result thetaNearestResult = thetaNearestResults.get(i);
-		    Message nearestMessage = (Message) (((NoIndex) thetaNearestResult.get(2)).getInstance());
+		    //Message nearestMessage = (Message) (((NoIndex) thetaNearestResult.get(2)).getInstance());
+		    Comparable<?> c = ((Relation)thetaNearestResult.get()).getRange();
+		    Message nearestMessage = (Message) (((NoIndex) c).getInstance());  
 		    List<Integer> restensor = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(nearestMessage.content()));
 		    FloatTensor cantensor = normalize(restensor);
 		    // compute dot safely for the overlapping length
@@ -592,14 +592,14 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// walk over interactions
 		int listCtr = 0;
 		while(listCtr < valueList.size()) {
-			TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).result().get(1);
+			TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).getMap();
 			switch(tsRole.getRole()) {
 			case Role.SYSTEM:
 			case Role.USER:
-				if(listCtr+1 >= valueList.size() || 
-					!(((TimestampRole)(valueList.get(listCtr+1).result().get(1))).getRole().equals(Role.ASSISTANT)) ||
-					!(((TimestampRole)(valueList.get(listCtr+1).result().get(1))).getTimestamp().equals(tsRole.getTimestamp()))) {
-					TimestampRole tsr = new TimestampRole();
+				// get the next in interaction - the response
+				TimestampRole tsr = ((TimestampRole)(valueList.get(listCtr+1).getMap()));
+				if(listCtr+1 >= valueList.size() || !tsr.getRole().equals(Role.ASSISTANT) || !tsr.getTimestamp().equals(tsRole.getTimestamp())) {
+					tsr = new TimestampRole();
 					tsr.setTimestamp(tsRole.getTimestamp());
 					tsr.setRole(Role.ASSISTANT);
 					insertMap.put(listCtr, tsr); //nearest entry is USER, next is NOT ASSISTANT, so set this to look for ASSISTANT
@@ -615,7 +615,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				// role is assistant without previous valid USER (matching timestamp), otherwise we would have skipped this entry
 				// Our insertMap will only account for USER level rather than try to resolve a missing SYSTEM as this would
 				// effectively double our secondary retrieval without corresponding gain in semantic quality.
-				TimestampRole tsr = new TimestampRole();
+				tsr = new TimestampRole();
 				tsr.setTimestamp(tsRole.getTimestamp());
 				tsr.setRole(Role.USER);
 				insertMap.put(listCtr, tsr); //nearest entry is ASSISTANT, previous was NOT USER or SYSTEM, so set this to look for USER
@@ -648,7 +648,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		listCtr = 0;
 		mainLoop:
 		while (listCtr < valueList.size()) {
-		    TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).result().get(1);
+		    TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).getMap();
 		    switch (tsRole.getRole()) {
 		        case Role.SYSTEM:
 		        case Role.USER:
@@ -706,11 +706,11 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        		if(listCtr == 0) {
 		        			log.info(">> DATABASE INCONSISTENCY: NO MATCHING USER OR SYSTEM ENTRY FOR INSERTION INTO DIALOG SEQUENCE:"+insertMapValue);
 		        		} else {
-		        			TimestampRole tsRolePrev = (TimestampRole)valueList.get(listCtr-1).result().get(1);
+		        			TimestampRole tsRolePrev = (TimestampRole)valueList.get(listCtr-1).getMap();
 		        			if((tsRolePrev.getRole().equals(Role.SYSTEM) || tsRolePrev.getRole().equals(Role.USER)) &&
 		        				(tsRolePrev.getTimestamp().equals(tsRole.getTimestamp()))) {
 		        				// previous entry is valid USER/SYSTEM before ASSISTANT
-			        			Result resultU = valueList.get(listCtr-1).result();
+			        			Result resultU = valueList.get(listCtr-1).getResult();
 			        			Message resultMessageU = (Message) ((NoIndex)(resultU.get(resultU.length()-1))).getInstance();
 			        			int tokenSize = promptFrame.chatFormat().length(resultMessageU.encode());
 			        			NearResult resultA = valueList.get(listCtr);
@@ -823,7 +823,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * Prime the semantic pump by retrieving last time value, then the relations with that value, later, feed the
 	 * vectors for that time into the prompt, then retrieve any other indexes that match the retrieved indexes.
 	 * So should pick up at least the 2 indexes for a USER/ASSISTANT request/response for a given timestamp
-	 * @return The Results result set with index at element 0
+	 * @return The Results result set with index in domain
 	 * @throws InterruptedException asynchronous db client exception
 	 * @throws ExecutionException asynchronous client/database exception
 	 */
@@ -832,13 +832,10 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		TimestampRole lastTime = (TimestampRole) dbClient.last(xid, TimestampRole.class).get();
 		if(lastTime != null) {
 			//try (var _ = Timer.log("primeByTime Querying by time "+ LocalDateTime.ofInstant(Instant.ofEpochMilli(lastTime.getTimestamp()), ZoneId.systemDefault()))) {
-				CompletableFuture<Iterator> cres = dbClient.findSet(xid, '?', lastTime, '*');
-				Iterator<?> it = cres.get();
-				while(it.hasNext()) {
-					// LSH index in Result(0)
-					res.add((Result) it.next());
-				}
-			//}
+			((Stream<Result>) dbClient.findStream(xid, '*', lastTime, '*').get()).parallel().forEach(e->{
+					// LSH index in Result domain
+					res.add((Result)e);
+			});
 		}
 		if(DEBUG)
 			log.info("primeByTime returned "+res.size()+" results.");
