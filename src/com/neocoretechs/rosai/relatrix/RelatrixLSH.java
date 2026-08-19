@@ -23,14 +23,12 @@ import java.util.stream.Stream;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import com.neocoretechs.relatrix.DuplicateKeyException;
 import com.neocoretechs.relatrix.Relation;
-import com.neocoretechs.relatrix.Relatrix;
-import com.neocoretechs.relatrix.type.RelationList;
+import com.neocoretechs.relatrix.AbstractRelation;
 import com.neocoretechs.relatrix.Result;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.key.NoIndex;
-import com.neocoretechs.relatrix.parallel.ExecutionContextHolder;
+import com.neocoretechs.relatrix.type.RelationList;
 import com.neocoretechs.rocksack.TransactionId;
 
 import com.neocoretechs.rosai.lsh.CosineHash;
@@ -92,45 +90,26 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	
 	static final class NearResult {
 		public int tokenSize;
-		private Result result;
-		NearResult(int tokenSize,Result result) {
+		private AbstractRelation result;
+		NearResult(int tokenSize, AbstractRelation result) {
 			this.tokenSize = tokenSize;
 			this.result = result;
-		}
-		public Result getResult() {
+		}	
+		public AbstractRelation getResult() {
 			return result;
 		}
 		public Object getDomain() {
-			return ((Relation)result.get()).getDomain();
+			return result.getDomain();
 		}
 		public Object getMap() {
-			return ((Relation)result.get()).getMap();
+			return result.getMap();
 		}
 		public Object getRange() {
-			return ((Relation)result.get()).getRange();
+			return result.getRange();
 		}
 	}
 	
-	private static class ThetaPair {
-	    final double theta;      // angle in radians (smaller = more similar)
-	    final NearResult near;
-	    final int index;         // original index for deterministic tie-break
-	    ThetaPair(double theta, NearResult near, int index) {
-	        this.theta = theta; this.near = near; this.index = index;
-	    }
-	    public Object getNearResult(int elem) {
-	    	switch(elem) {
-	    	case 0:
-	    		return near.getDomain();
-	    	case 1:
-	    		return near.getMap();
-	    	case 2:
-	    		return near.getRange();
-	    	default:
-	    		throw new RuntimeException("bad param to getNearResult:"+elem);
-	    	}
-	    }
-	}
+	private static record ThetaPair(double theta, NearResult near, int index) {}
 
 	public RelatrixLSH() {}
 
@@ -190,7 +169,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws InterruptedException
 	 * @throws ExecutionException
 	 */
-	public List<Result> queryParallel(FloatTensor normalizedQuery) throws InterruptedException, ExecutionException  {
+	public RelationList queryParallel(FloatTensor normalizedQuery) throws InterruptedException, ExecutionException  {
 		ArrayList<Object> iq = new ArrayList<Object>();
 		for(int i = 0; i < hashTable.size(); i++) {
 			Integer combinedHash = hash(hashTable.get(i), normalizedQuery);
@@ -210,11 +189,11 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws ExecutionException asynchronous database client exception
 	 * @throws InterruptedException asynchronous database client exception
 	 */
-	public List<Result> queryParallel(List<Object> query) throws InterruptedException, ExecutionException  {
-		List<Result> res = null;
+	public RelationList queryParallel(List<Object> query) throws InterruptedException, ExecutionException  {
+		RelationList res = null;
 		//try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
 			CompletableFuture<List> cres = dbClient.findSetParallel(xid, query, '*', '*');
-			res = cres.get();
+			res = (RelationList) cres.get();
 		//}
 		return res;
 	}
@@ -229,11 +208,11 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws InterruptedException
 	 * @throws ExecutionException
 	 */
-	public List<Result> queryParallelMap(List<Object> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
-		List<Result> res = null;
+	public RelationList queryParallelMap(List<Object> query) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
+		RelationList res = null;
 		//try (var _ = Timer.log("Querying combined hash for List of "+query.size())) {
 			CompletableFuture<List> cres = dbClient.findSetParallel(xid, '*', query, '*');
-			res = cres.get();
+			res = (RelationList) cres.get();
 			//if(DEBUG)
 			//	for(Result r: res)
 			//		System.out.println(((TimestampRole)(r.get(0))).getTimestamp()+" "+r);
@@ -513,7 +492,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @throws IllegalArgumentException asychronous database client exception
 	 */
 	public List<ChatFormat.Message> findNearest(ChatFormat.Message promptFrame) throws IllegalArgumentException, ClassNotFoundException, IllegalAccessException, IOException, InterruptedException, ExecutionException {
-		List<Result> thetaNearestResults = null;
+		RelationList thetaNearestResults = null;
 		int contentSize = promptFrame.chatFormat().length(promptFrame.encode());
 		List<Integer> promptFrameTokens = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(promptFrame.content()));
 		//if(DEBUG)
@@ -560,9 +539,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		int K = thetaNearestResults.size(); // or limit to top-K if you want
 		List<ThetaPair> scored = new ArrayList<>(K);
 		for (int i = 0; i < K; i++) {
-		    Result thetaNearestResult = thetaNearestResults.get(i);
+		    AbstractRelation thetaNearestResult = (AbstractRelation) thetaNearestResults.get(i);
 		    //Message nearestMessage = (Message) (((NoIndex) thetaNearestResult.get(2)).getInstance());
-		    Comparable<?> c = ((Relation)thetaNearestResult.get()).getRange();
+		    Comparable<?> c = thetaNearestResult.getRange();
 		    Message nearestMessage = (Message) (((NoIndex) c).getInstance());  
 		    List<Integer> restensor = promptFrame.chatFormat().stripFormatting(promptFrame.chatFormat().encodeAsList(nearestMessage.content()));
 		    FloatTensor cantensor = normalize(restensor);
@@ -636,9 +615,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		// nearest list, if found. If we cant locate a corresponding interaction element, then skip the entry.
 		// Our map has a TimestampRole with a matching timestamp and the opposite role used to launch the query.
 		List<Object> timestampRoleQuery = new ArrayList<Object>(insertMap.values());
-		List<Result> timestampRoleResult = null;
+		RelationList timestampRoleResult = null;
 		if(!timestampRoleQuery.isEmpty()) {
-			timestampRoleResult = queryParallelMap(timestampRoleQuery);
+			timestampRoleResult = (RelationList) queryParallelMap(timestampRoleQuery);
 		}
 		if(DEBUG)
 			log.info("timestampRoleResult size:"+timestampRoleResult.size());
@@ -655,13 +634,13 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        	TimestampRole insertMapValue = insertMap.get(listCtr);
 		        	if(insertMapValue != null) {
 		        		// we have an insert, match insert then move on to next entry
-		        		Optional<Result> insertMessage = matchTimestampRole(timestampRoleResult, insertMapValue);
+		        		Optional<AbstractRelation> insertMessage = matchTimestampRole(timestampRoleResult, insertMapValue);
 		        		if(insertMessage.isPresent()) {
-		        			Result resultA = insertMessage.get();
-		        			Message resultMessageA = (Message) ((NoIndex)(resultA.get(resultA.length()-1))).getInstance();
+		        			AbstractRelation resultA = insertMessage.get();
+		        			Message resultMessageA = (Message) ((NoIndex)(resultA.getRange())).getInstance();
 		        			int tokenSize = promptFrame.chatFormat().length(resultMessageA.encode());
 		        			NearResult resultU = valueList.get(listCtr);
-		        			Message resultMessageU = (Message) ((NoIndex)(resultU.result.get(resultU.result.length()-1))).getInstance();
+		        			Message resultMessageU = (Message) ((NoIndex)(resultU.result.getRange())).getInstance();
 		        		    int prospect = contentSize + resultU.tokenSize + tokenSize; // contentSize of prompt way up at the beginning
 		        		    if(prospect < maxTokens) {
 		        		    	contentSize = prospect;
@@ -682,14 +661,14 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        case Role.ASSISTANT:
 		        	insertMapValue = insertMap.get(listCtr);
 		        	if (insertMapValue != null) {
-		        		Optional<Result> insertMessage = matchTimestampRole(timestampRoleResult, insertMapValue);
+		        		Optional<AbstractRelation> insertMessage = matchTimestampRole(timestampRoleResult, insertMapValue);
 		        		if (insertMessage.isPresent() ) {
 		        			// USER before ASSISTANT
-		        			Result resultU = insertMessage.get();
-		        			Message resultMessageU = (Message) ((NoIndex)(resultU.get(resultU.length()-1))).getInstance();
+		        			AbstractRelation resultU = insertMessage.get();
+		        			Message resultMessageU = (Message) ((NoIndex)(resultU.getRange())).getInstance();
 		        			int tokenSize = promptFrame.chatFormat().length(resultMessageU.encode());
 		        			NearResult resultA = valueList.get(listCtr);
-		        			Message resultMessageA = (Message) ((NoIndex)(resultA.result.get(resultA.result.length()-1))).getInstance();
+		        			Message resultMessageA = (Message) ((NoIndex)(resultA.result.getRange())).getInstance();
 		        		    int prospect = contentSize + resultA.tokenSize + tokenSize; // contentSize of prompt way up at the beginning
 		        		    if(prospect < maxTokens) {
 		        		    	contentSize = prospect;
@@ -710,11 +689,11 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		        			if((tsRolePrev.getRole().equals(Role.SYSTEM) || tsRolePrev.getRole().equals(Role.USER)) &&
 		        				(tsRolePrev.getTimestamp().equals(tsRole.getTimestamp()))) {
 		        				// previous entry is valid USER/SYSTEM before ASSISTANT
-			        			Result resultU = valueList.get(listCtr-1).getResult();
-			        			Message resultMessageU = (Message) ((NoIndex)(resultU.get(resultU.length()-1))).getInstance();
+			        			AbstractRelation resultU = valueList.get(listCtr-1).getResult();
+			        			Message resultMessageU = (Message) ((NoIndex)(resultU.getRange())).getInstance();
 			        			int tokenSize = promptFrame.chatFormat().length(resultMessageU.encode());
 			        			NearResult resultA = valueList.get(listCtr);
-			        			Message resultMessageA = (Message) ((NoIndex)(resultA.result.get(resultA.result.length()-1))).getInstance();
+			        			Message resultMessageA = (Message) ((NoIndex)(resultA.result.getRange())).getInstance();
 			        		    int prospect = contentSize + resultA.tokenSize + tokenSize; // contentSize of prompt way up at the beginning
 			        		    if(prospect < maxTokens) {
 			        		    	contentSize = prospect;
@@ -755,22 +734,23 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	}
 
 	/**
-	 * Match a TimestampRole timestamp with a Result set List element 0 timestamp and role
-	 * @param source
-	 * @param target
-	 * @return the matching Result set with timetampRole and any additional retrieved elements
+	 * Match a TimestampRole timestamp with a RelationList List timestamp and role<p>
+	 * The RelationList has our Abstractrelation of index, timestampRole, and NoIndex interaction
+	 * @param timestampRoleResult
+	 * @param target The target TimestampRole to match Role and Timestamp
+	 * @return the matching AbstractRelation Optional set with timetampRole and payload
 	 */
-	private static Optional<Result> matchTimestampRole(List<Result> source, TimestampRole target) {
-		Optional<Result> res = Optional.empty();
-		for(Result queryResult: source) {
-			TimestampRole timestampQueryResult = (TimestampRole) queryResult.get(0);
+	private static Optional<AbstractRelation> matchTimestampRole(RelationList timestampRoleResult, TimestampRole target) {
+		Optional<AbstractRelation> res = Optional.empty();
+		for(Comparable<?> queryResult: timestampRoleResult) {
+			TimestampRole timestampQueryResult = (TimestampRole) ((AbstractRelation)queryResult).getMap();
 			//if(DEBUG)
 			//	log.info("findNearest.matchTimestamp timestampQueryResult="+timestampQueryResult+" target="+target+" queryResult="+queryResult);
 			//String stime1 = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampQueryResult.getTimestamp()), ZoneId.systemDefault()).toString();
 			//String stime2 = LocalDateTime.ofInstant(Instant.ofEpochMilli(target.getTimestamp()), ZoneId.systemDefault()).toString();
 			if(timestampQueryResult.getRole().equals(target.getRole()) &&
 				timestampQueryResult.getTimestamp().longValue() == target.getTimestamp().longValue()) {
-				res = Optional.ofNullable(queryResult);
+				res = Optional.ofNullable((AbstractRelation)queryResult);
 				break;
 			}
 		}
@@ -788,16 +768,17 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	private void getTimestampRole(ChatFormat chatFormat, List<ChatFormat.Message> returns, TimestampRole trr) throws InterruptedException, ExecutionException {
 		//if(DEBUG)
 		//	log.info("getTimestampRole for "+trr);
-		//CompletableFuture<Stream> cit = dbClient.findStream(xid, '*', trr, '?');
+		//CompletableFuture<Stream> cit = dbClient.findStream(xid, '*', trr, '*');
 		//cit.get().forEach(e->{
-		CompletableFuture<Iterator> cit = dbClient.findSet(xid, '*', trr, '?');
+		CompletableFuture<Iterator> cit = dbClient.findSet(xid, '*', trr, '*');
 		Iterator<?> it = cit.get();
 		// get one instance
 		if(it.hasNext()) {
 			//if(DEBUG)
 				//log.info("getTimeStampRole result");
 			//addRetrievedMessage((Result)e, trr, results, returns, tokenizer);
-			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)((Result)it.next()).get(0)).getInstance();
+			AbstractRelation ar = (AbstractRelation) ((Result)it.next()).get();
+			ChatFormat.Message message = (ChatFormat.Message)((NoIndex)ar.getRange()).getInstance();
 			returns.add(message);
 			//});
 		}
@@ -843,20 +824,21 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	}
 	
 	public Iterator dump() throws ExecutionException, InterruptedException {
-			CompletableFuture<Iterator> cit = dbClient.findSet(xid, '?', '?', '?');
+			CompletableFuture<Iterator> cit = dbClient.findSet(xid, '*', '*', '*');
 			return cit.get();
 	}
 	public String dump(Iterator it, ChatFormat chatFormat) throws ExecutionException {
 		if(it.hasNext()) {
 			Result r = (Result) it.next();
+			Comparable[] ar = r.toArray();
 			StringBuilder sb = new StringBuilder();
 			sb.append("LSH=");
-			sb.append(r.get(0));
+			sb.append(ar[0]);
 			sb.append(" ");
 			sb.append("Time/Role=");
-			sb.append(r.get(1));
+			sb.append(ar[1]);
 			sb.append("\r\n");
-			NoIndex noIndex = (NoIndex) r.get(2);
+			NoIndex noIndex = (NoIndex) ar[2];
 			sb.append((ChatFormat.Message)noIndex.getInstance());
 			//List<Integer> restensor = (List<Integer>)noIndex.getInstance();
 			//sb.append(DeviceManager.decode(chatFormat, restensor));
@@ -869,7 +851,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * command /recalltime 
 	 * arg day time to end day time
 	 * @param query the command line with command times, start, end in form DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
-	 * @return Iterator of Result instances from db that contain 3 elements of Index, TimestampRole, question/answer Message in time range
+	 * @return Iterator of Result instances from db that contain AbstractRelation of Index, TimestampRole, question/answer Message in time range
 	 * @throws ExecutionException 
 	 * @throws InterruptedException 
 	 */
@@ -886,15 +868,15 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		millise = localDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
 		TimestampRole tStart = new TimestampRole(millis, ChatFormat.Role.ASSISTANT);
 		TimestampRole tEnd = new TimestampRole(millise, ChatFormat.Role.USER);
-		return dbClient.findSubSet(xid,'?','?','?',Integer.class,Integer.class,tStart,tEnd,NoIndex.class,NoIndex.class).get();
+		return dbClient.findSubSet(xid,'*','*','*',Integer.class,Integer.class,tStart,tEnd,NoIndex.class,NoIndex.class).get();
 		/*
-		s = dbClient.findSubStream(xid,'*','?','?',tStart,tEnd,NoIndex.class,NoIndex.class);
+		s = dbClient.findSubStream(xid,'*','*','*',tStart,tEnd,NoIndex.class,NoIndex.class);
 		StringBuilder sb = new StringBuilder();
 		try {
 			s.get().forEach(e->{
-				sb.append(((Result)e).get(0));
+				sb.append(((Result)e).get());
 				sb.append("\r\n");
-				List<Integer> restensor = (List<Integer>)((NoIndex)(((Result)e).get(1))).getInstance();
+				List<Integer> restensor = (List<Integer>)((NoIndex)((AbstractRelation)((Result)e).get()).getRange()).getInstance();
 				sb.append(DeviceManager.decode(chatFormat, restensor));
 				sb.append("\r\n");
 			});
