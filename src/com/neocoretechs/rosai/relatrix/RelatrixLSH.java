@@ -72,7 +72,7 @@ import com.neocoretechs.rosai.F32FloatTensor;
 public final class RelatrixLSH implements Serializable, Comparable {
 	private static final Log log = LogFactory.getLog(RelatrixLSH.class);
 	private static final long serialVersionUID = -5410017645908038641L;
-	private static boolean DEBUG = false;
+	private static boolean DEBUG = true;
 	public int numberOfHashTables = 16;
 	public int numberOfHashes = 12;
 	public AsynchRelatrixClientTransaction dbClient;
@@ -570,7 +570,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 		HashMap<Integer, TimestampRole> insertMap = new HashMap<Integer, TimestampRole>();
 		// walk over interactions
 		int listCtr = 0;
-		while(listCtr < valueList.size()) {
+		while(listCtr < valueList.size()-1) {
 			TimestampRole tsRole = (TimestampRole)valueList.get(listCtr).getMap();
 			switch(tsRole.getRole()) {
 			case Role.SYSTEM:

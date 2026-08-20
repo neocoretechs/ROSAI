@@ -14,7 +14,7 @@ import org.apache.commons.logging.LogFactory;
  */
 public final class DeviceManager {
 	private static final Log log = LogFactory.getLog(DeviceManager.class);
-	private static boolean DEBUG = false;
+	private static boolean DEBUG = true;
 
 	public static void loadModel(StringTensor model, int contextSize) {
 		MemorySegment hostSeg = model.getSegment();
