@@ -27,6 +27,7 @@ import com.neocoretechs.relatrix.Relation;
 import com.neocoretechs.relatrix.AbstractRelation;
 import com.neocoretechs.relatrix.Result;
 import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
+import com.neocoretechs.relatrix.client.asynch.json.AsynchRelatrixClientTransactionJson;
 import com.neocoretechs.relatrix.key.NoIndex;
 import com.neocoretechs.relatrix.type.RelationList;
 import com.neocoretechs.rocksack.TransactionId;
@@ -75,7 +76,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	private static boolean DEBUG = true;
 	public int numberOfHashTables = 16;
 	public int numberOfHashes = 12;
-	public AsynchRelatrixClientTransaction dbClient;
+	public AsynchRelatrixClientTransactionJson dbClient;
 	private TransactionId xid;
 	private int maxTokens;
 	private static final float maxTokenOverhead = .35f;
@@ -113,8 +114,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 
 	public RelatrixLSH() {}
 
-	public RelatrixLSH(AsynchRelatrixClientTransaction dbClient, int maxTokens) {
-		this(dbClient, 12, 16, 50, maxTokens);
+	public RelatrixLSH(AsynchRelatrixClientTransactionJson dbClient2, int maxTokens) {
+		this(dbClient2, 12, 16, 50, maxTokens);
 	}
 	/**
 	 * Initialize a new hash table, uses Cosine hash family.
@@ -123,7 +124,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 * @param numberOfhashTables the number of tables each containing number of hashes
 	 * @param projectionVectorSize The number of elements in the vector projected into high dimensional space
 	 */
-	public RelatrixLSH(AsynchRelatrixClientTransaction dbClient, int numberOfHashes, int numberOfHashTables, int projectionVectorSize, int maxTokens) {
+	public RelatrixLSH(AsynchRelatrixClientTransactionJson dbClient, int numberOfHashes, int numberOfHashTables, int projectionVectorSize, int maxTokens) {
 		this.dbClient = dbClient;
 		this.numberOfHashes = numberOfHashes;
 		this.numberOfHashTables = numberOfHashTables;

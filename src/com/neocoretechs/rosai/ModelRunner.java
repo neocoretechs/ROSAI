@@ -8,18 +8,13 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.io.UnsupportedEncodingException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.time.Duration;
+
 import java.time.LocalDateTime;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -40,13 +35,14 @@ import org.ros.node.AbstractNodeMain;
 import org.ros.node.ConnectedNode;
 import org.ros.node.topic.Publisher;
 import org.ros.node.topic.Subscriber;
-import org.json.JSONObject;
-import org.jsoup.nodes.Document;
-import org.jsoup.parser.Parser;
 
-import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
+import org.json.JSONObject;
+
+import com.neocoretechs.relatrix.client.asynch.json.AsynchRelatrixClientTransactionJson;
 import com.neocoretechs.relatrix.parallel.SynchronizedThreadManager;
+
 import com.neocoretechs.rocksack.TransactionId;
+
 import com.neocoretechs.rosai.ChatFormat.Message;
 import com.neocoretechs.rosai.contentprocessor.ContentParser;
 import com.neocoretechs.rosai.ffi.NativeLoader;
@@ -71,7 +67,7 @@ public class ModelRunner extends AbstractNodeMain {
 	// Batch-size used in prompt evaluation.
 	public static boolean DEBUG = false;
 	public static boolean DISPLAY_METADATA = false;
-	AsynchRelatrixClientTransaction dbClient = null;
+	AsynchRelatrixClientTransactionJson dbClient = null;
 	//static RelatrixTransaction dbClient = null;
 	TransactionId xid = null;
 	Alias tensorAlias = null;
@@ -441,7 +437,7 @@ public class ModelRunner extends AbstractNodeMain {
         }
 		//try(Timer _ = Timer.log("run model interactive")) {
 			//tokNum = DeviceManager.runModel(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retTokens);
-			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retIntTokens,Llama3.options.getMaxTokens());
+			tokNum = DeviceManager.runModelTokenize(p, Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), retIntTokens, Llama3.options.getMaxTokens());
 			if(DEBUG)
 				log.info("Returned Tokens="+tokNum);
 		//}
