@@ -26,7 +26,6 @@ import org.apache.commons.logging.LogFactory;
 import com.neocoretechs.relatrix.Relation;
 import com.neocoretechs.relatrix.AbstractRelation;
 import com.neocoretechs.relatrix.Result;
-import com.neocoretechs.relatrix.client.asynch.AsynchRelatrixClientTransaction;
 import com.neocoretechs.relatrix.client.asynch.json.AsynchRelatrixClientTransactionJson;
 import com.neocoretechs.relatrix.key.NoIndex;
 import com.neocoretechs.relatrix.type.RelationList;
@@ -514,10 +513,9 @@ public final class RelatrixLSH implements Serializable, Comparable {
 				// each timestamp entry
 				for(int i = 0; i < resByTime.size(); i++) {
 					Result result = resByTime.get(i);
-					// LSH at ((Relation)Result.get()).getDomain()
 					// re-form the nearest list by getting all the LSH for the given timestamp
-					if(!lshQuery.contains(((Relation)result.get()).getDomain()))
-						lshQuery.add(((Relation)result.get()).getDomain());
+					if(!lshQuery.contains(result.getDomain()))
+						lshQuery.add(result.getDomain());
 				}
 				// now query the matching LSH indexes we got from each timestamp
 				thetaNearestResults = queryParallel(lshQuery);
@@ -621,7 +619,7 @@ public final class RelatrixLSH implements Serializable, Comparable {
 			timestampRoleResult = (RelationList) queryParallelMap(timestampRoleQuery);
 		}
 		if(DEBUG)
-			log.info("timestampRoleResult size:"+timestampRoleResult.size());
+			log.info("timestampRoleResult size:"+(timestampRoleResult == null ? "0 (null)" : timestampRoleResult.size()));
 		// walk the NearResults looking for matching insertMap elements
 		// insert Results into original valueList in correct order, calculating size of token list for each new element
 		// walk over interactions with our insert map
@@ -743,6 +741,8 @@ public final class RelatrixLSH implements Serializable, Comparable {
 	 */
 	private static Optional<AbstractRelation> matchTimestampRole(RelationList timestampRoleResult, TimestampRole target) {
 		Optional<AbstractRelation> res = Optional.empty();
+		if(timestampRoleResult == null)
+			return res;
 		for(Comparable<?> queryResult: timestampRoleResult) {
 			TimestampRole timestampQueryResult = (TimestampRole) ((AbstractRelation)queryResult).getMap();
 			//if(DEBUG)

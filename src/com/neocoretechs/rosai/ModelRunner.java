@@ -11,6 +11,7 @@ import java.io.PrintWriter;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import java.time.LocalDateTime;
@@ -144,6 +145,7 @@ public class ModelRunner extends AbstractNodeMain {
 		// contextLength is used for maximum context size. 
 		//
 		Llama3.options = Options.parseOptions(opts);
+		System.out.printf("Options: temp:%f minp:%f topp:%f MaxTokens:%d%n",Llama3.options.temperature(), Llama3.options.minp(), Llama3.options.topp(), Llama3.options.getMaxTokens());
 		String filePath = Llama3.options.modelPath().toString();
 		File file = new File(filePath);
 		if(!file.exists()) {
@@ -594,6 +596,14 @@ public class ModelRunner extends AbstractNodeMain {
 														e.printStackTrace();
 													}
 													return Optional.empty();
+												} else {
+													if(chatMessage.startsWith("rawfile://")) {
+														try {
+															return Optional.of(Files.readString(Path.of(chatMessage.substring(10))));
+														} catch (IOException e) {
+															return Optional.of("processing file "+chatMessage+" failed due to :"+e.getMessage()+" at "+ LocalDateTime.now());
+														}
+													}
 												}
 											}
 										}
