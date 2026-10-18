@@ -1,0 +1,1 @@
+/home/jg/llama.cpp/build/bin/llama-server -m Downloads/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 999 -c 131072 -np 4 --host 127.0.0.1 --port 8080  --jinja --reasoning-preserve --temp 1.0 --top-p 0.95 --top-k 20 --flash-attn on
